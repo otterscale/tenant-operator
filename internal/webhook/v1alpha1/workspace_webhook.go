@@ -33,7 +33,7 @@ import (
 
 // SetupWorkspaceWebhookWithManager registers the webhook for Workspace in the manager.
 // operatorSA is the full service account identity of the controller-manager
-// (e.g. "system:serviceaccount:otterscale-system:otterscale-operator-controller-manager")
+// (e.g. "system:serviceaccount:otterscale-system:tenant-operator-controller-manager")
 // used to exempt the operator's own reconciliation updates from workspace-level authorization.
 func SetupWorkspaceWebhookWithManager(mgr ctrl.Manager, operatorSA string) error {
 	return ctrl.NewWebhookManagedBy(mgr, &tenantv1alpha1.Workspace{}).

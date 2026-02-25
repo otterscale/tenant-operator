@@ -202,7 +202,7 @@ func main() {
 		// This allows the validating webhook to exempt the operator's own reconciliation
 		// updates regardless of the namespace it is deployed in.
 		podNamespace := cmp.Or(os.Getenv("POD_NAMESPACE"), "otterscale-system")
-		podServiceAccount := cmp.Or(os.Getenv("POD_SERVICE_ACCOUNT"), "otterscale-operator-controller-manager")
+		podServiceAccount := cmp.Or(os.Getenv("POD_SERVICE_ACCOUNT"), "tenant-operator-controller-manager")
 		operatorSA := workspace.OperatorServiceAccountIdentity(podNamespace, podServiceAccount)
 
 		if err := webhookv1alpha1.SetupWorkspaceWebhookWithManager(mgr, operatorSA); err != nil {

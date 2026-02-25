@@ -311,7 +311,7 @@ var _ = Describe("Workspace Controller", func() {
 	Context("Domain Helpers", func() {
 		It("should generate correct labels", func() {
 			wsLabels := ws.LabelsForWorkspace("workspace-name", "v1")
-			Expect(wsLabels).To(HaveKeyWithValue(labels.Instance, "workspace-name"))
+			Expect(wsLabels).To(HaveKeyWithValue(labels.Name, "workspace-name"))
 			Expect(wsLabels).To(HaveKeyWithValue(labels.Version, "v1"))
 			Expect(wsLabels).To(HaveKeyWithValue(labels.Component, "workspace"))
 			Expect(wsLabels).To(HaveKeyWithValue(labels.PartOf, "otterscale-system"))

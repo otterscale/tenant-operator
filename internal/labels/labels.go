@@ -45,7 +45,7 @@ func Standard(name, component, version string) map[string]string {
 		Name:      name,
 		Component: component,
 		PartOf:    "otterscale-system",
-		ManagedBy: "operator-template",
+		ManagedBy: "tenant-operator",
 		Version:   version,
 	}
 }
