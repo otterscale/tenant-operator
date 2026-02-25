@@ -24,7 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
-	ws "github.com/otterscale/tenant-operator/internal/workspace"
+	"github.com/otterscale/tenant-operator/internal/workspace"
 )
 
 var _ = Describe("Workspace Webhook", func() {
@@ -55,14 +55,14 @@ var _ = Describe("Workspace Webhook", func() {
 
 			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
 
-			Expect(obj.Labels).To(HaveKeyWithValue(ws.UserLabelPrefix+"admin-user", "true"))
-			Expect(obj.Labels).To(HaveKeyWithValue(ws.UserLabelPrefix+"view-user", "true"))
+			Expect(obj.Labels).To(HaveKeyWithValue(workspace.UserLabelPrefix+"admin-user", "true"))
+			Expect(obj.Labels).To(HaveKeyWithValue(workspace.UserLabelPrefix+"view-user", "true"))
 		})
 
 		It("should remove stale user labels when members are removed", func() {
 			obj.Labels = map[string]string{
-				ws.UserLabelPrefix + "admin-user":   "true",
-				ws.UserLabelPrefix + "removed-user": "true",
+				workspace.UserLabelPrefix + "admin-user":   "true",
+				workspace.UserLabelPrefix + "removed-user": "true",
 			}
 			obj.Spec.Members = []tenantv1alpha1.WorkspaceMember{
 				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "admin-user"},
@@ -70,14 +70,14 @@ var _ = Describe("Workspace Webhook", func() {
 
 			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
 
-			Expect(obj.Labels).To(HaveKeyWithValue(ws.UserLabelPrefix+"admin-user", "true"))
-			Expect(obj.Labels).NotTo(HaveKey(ws.UserLabelPrefix + "removed-user"))
+			Expect(obj.Labels).To(HaveKeyWithValue(workspace.UserLabelPrefix+"admin-user", "true"))
+			Expect(obj.Labels).NotTo(HaveKey(workspace.UserLabelPrefix + "removed-user"))
 		})
 
 		It("should correctly sync labels when member list is completely replaced", func() {
 			obj.Labels = map[string]string{
-				ws.UserLabelPrefix + "old-admin": "true",
-				ws.UserLabelPrefix + "old-view":  "true",
+				workspace.UserLabelPrefix + "old-admin": "true",
+				workspace.UserLabelPrefix + "old-view":  "true",
 			}
 			obj.Spec.Members = []tenantv1alpha1.WorkspaceMember{
 				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "new-admin"},
@@ -86,17 +86,17 @@ var _ = Describe("Workspace Webhook", func() {
 
 			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
 
-			Expect(obj.Labels).To(HaveKeyWithValue(ws.UserLabelPrefix+"new-admin", "true"))
-			Expect(obj.Labels).To(HaveKeyWithValue(ws.UserLabelPrefix+"new-editor", "true"))
-			Expect(obj.Labels).NotTo(HaveKey(ws.UserLabelPrefix + "old-admin"))
-			Expect(obj.Labels).NotTo(HaveKey(ws.UserLabelPrefix + "old-view"))
+			Expect(obj.Labels).To(HaveKeyWithValue(workspace.UserLabelPrefix+"new-admin", "true"))
+			Expect(obj.Labels).To(HaveKeyWithValue(workspace.UserLabelPrefix+"new-editor", "true"))
+			Expect(obj.Labels).NotTo(HaveKey(workspace.UserLabelPrefix + "old-admin"))
+			Expect(obj.Labels).NotTo(HaveKey(workspace.UserLabelPrefix + "old-view"))
 		})
 
 		It("should preserve non-user custom labels", func() {
 			obj.Labels = map[string]string{
-				"my-custom-label":                 "my-custom-value",
-				"another-label":                   "another-value",
-				ws.UserLabelPrefix + "stale-user": "true",
+				"my-custom-label":                        "my-custom-value",
+				"another-label":                          "another-value",
+				workspace.UserLabelPrefix + "stale-user": "true",
 			}
 			obj.Spec.Members = []tenantv1alpha1.WorkspaceMember{
 				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "admin-user"},
@@ -106,8 +106,8 @@ var _ = Describe("Workspace Webhook", func() {
 
 			Expect(obj.Labels).To(HaveKeyWithValue("my-custom-label", "my-custom-value"))
 			Expect(obj.Labels).To(HaveKeyWithValue("another-label", "another-value"))
-			Expect(obj.Labels).To(HaveKeyWithValue(ws.UserLabelPrefix+"admin-user", "true"))
-			Expect(obj.Labels).NotTo(HaveKey(ws.UserLabelPrefix + "stale-user"))
+			Expect(obj.Labels).To(HaveKeyWithValue(workspace.UserLabelPrefix+"admin-user", "true"))
+			Expect(obj.Labels).NotTo(HaveKey(workspace.UserLabelPrefix + "stale-user"))
 		})
 
 		It("should handle workspace with nil labels", func() {
@@ -118,7 +118,7 @@ var _ = Describe("Workspace Webhook", func() {
 
 			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
 
-			Expect(obj.Labels).To(HaveKeyWithValue(ws.UserLabelPrefix+"admin-user", "true"))
+			Expect(obj.Labels).To(HaveKeyWithValue(workspace.UserLabelPrefix+"admin-user", "true"))
 		})
 
 		It("should handle members with special characters in their subject", func() {
@@ -128,7 +128,7 @@ var _ = Describe("Workspace Webhook", func() {
 
 			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
 
-			Expect(obj.Labels).To(HaveKeyWithValue(ws.UserLabelPrefix+"user.example.com", "true"))
+			Expect(obj.Labels).To(HaveKeyWithValue(workspace.UserLabelPrefix+"user.example.com", "true"))
 		})
 
 		It("should handle empty members slice without panic", func() {
@@ -137,7 +137,7 @@ var _ = Describe("Workspace Webhook", func() {
 			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
 
 			for k := range obj.Labels {
-				Expect(k).NotTo(HavePrefix(ws.UserLabelPrefix))
+				Expect(k).NotTo(HavePrefix(workspace.UserLabelPrefix))
 			}
 		})
 

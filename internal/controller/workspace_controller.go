@@ -43,7 +43,7 @@ import (
 	"k8s.io/client-go/tools/events"
 
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
-	ws "github.com/otterscale/tenant-operator/internal/workspace"
+	"github.com/otterscale/tenant-operator/internal/workspace"
 )
 
 // WorkspaceReconciler reconciles a Workspace object.
@@ -109,26 +109,26 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 func (r *WorkspaceReconciler) reconcileResources(ctx context.Context, w *tenantv1alpha1.Workspace) error {
 	istioEnabled := r.istioDetector.IsEnabled()
 
-	if err := ws.ReconcileNamespace(ctx, r.Client, r.Scheme, w, r.Version, istioEnabled); err != nil {
+	if err := workspace.ReconcileNamespace(ctx, r.Client, r.Scheme, w, r.Version, istioEnabled); err != nil {
 		return err
 	}
-	if err := ws.ReconcileRoleBindings(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
+	if err := workspace.ReconcileRoleBindings(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
 		return err
 	}
-	if err := ws.ReconcileResourceQuota(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
+	if err := workspace.ReconcileResourceQuota(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
 		return err
 	}
-	if err := ws.ReconcileLimitRange(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
+	if err := workspace.ReconcileLimitRange(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
 		return err
 	}
-	return ws.ReconcileNetworkIsolation(ctx, r.Client, r.Scheme, w, r.Version, istioEnabled)
+	return workspace.ReconcileNetworkIsolation(ctx, r.Client, r.Scheme, w, r.Version, istioEnabled)
 }
 
 // handleReconcileError categorizes errors and updates status accordingly.
 // Permanent errors (e.g. namespace conflict) do NOT requeue to avoid infinite loops.
 // Transient errors are returned to the controller-runtime for exponential backoff retry.
 func (r *WorkspaceReconciler) handleReconcileError(ctx context.Context, w *tenantv1alpha1.Workspace, err error) (ctrl.Result, error) {
-	var nce *ws.NamespaceConflictError
+	var nce *workspace.NamespaceConflictError
 	if errors.As(err, &nce) {
 		// Permanent error: do not requeue, just update status
 		r.setReadyConditionFalse(ctx, w, "NamespaceConflict", err.Error())
@@ -149,7 +149,7 @@ func (r *WorkspaceReconciler) setReadyConditionFalse(ctx context.Context, w *ten
 
 	patch := client.MergeFrom(w.DeepCopy())
 	meta.SetStatusCondition(&w.Status.Conditions, metav1.Condition{
-		Type:               ws.ConditionTypeReady,
+		Type:               workspace.ConditionTypeReady,
 		Status:             metav1.ConditionFalse,
 		Reason:             reason,
 		Message:            message,
@@ -278,7 +278,7 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 	for _, role := range orderedRoles {
 		if rolesInUse[role] {
 			newStatus.RoleBindingRefs = append(newStatus.RoleBindingRefs, tenantv1alpha1.ResourceReference{
-				Name:      ws.RoleBindingName + "-" + string(role),
+				Name:      workspace.RoleBindingName + "-" + string(role),
 				Namespace: w.Spec.Namespace,
 			})
 		}
@@ -287,7 +287,7 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 	// Update ResourceQuota reference
 	if w.Spec.ResourceQuota != nil {
 		newStatus.ResourceQuotaRef = &tenantv1alpha1.ResourceReference{
-			Name:      ws.ResourceQuotaName,
+			Name:      workspace.ResourceQuotaName,
 			Namespace: w.Spec.Namespace,
 		}
 	} else {
@@ -297,7 +297,7 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 	// Update LimitRange reference
 	if w.Spec.LimitRange != nil {
 		newStatus.LimitRangeRef = &tenantv1alpha1.ResourceReference{
-			Name:      ws.LimitRangeName,
+			Name:      workspace.LimitRangeName,
 			Namespace: w.Spec.Namespace,
 		}
 	} else {
@@ -309,16 +309,16 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 		if r.istioDetector.IsEnabled() {
 			newStatus.NetworkPolicyRef = nil
 			newStatus.PeerAuthenticationRef = &tenantv1alpha1.ResourceReference{
-				Name:      ws.PeerAuthenticationName,
+				Name:      workspace.PeerAuthenticationName,
 				Namespace: w.Spec.Namespace,
 			}
 			newStatus.AuthorizationPolicyRef = &tenantv1alpha1.ResourceReference{
-				Name:      ws.AuthorizationPolicyName,
+				Name:      workspace.AuthorizationPolicyName,
 				Namespace: w.Spec.Namespace,
 			}
 		} else {
 			newStatus.NetworkPolicyRef = &tenantv1alpha1.ResourceReference{
-				Name:      ws.NetworkPolicyName,
+				Name:      workspace.NetworkPolicyName,
 				Namespace: w.Spec.Namespace,
 			}
 			newStatus.PeerAuthenticationRef = nil
@@ -332,7 +332,7 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 
 	// Set Ready condition
 	meta.SetStatusCondition(&newStatus.Conditions, metav1.Condition{
-		Type:               ws.ConditionTypeReady,
+		Type:               workspace.ConditionTypeReady,
 		Status:             metav1.ConditionTrue,
 		Reason:             "Reconciled",
 		Message:            "Workspace resources are successfully reconciled",

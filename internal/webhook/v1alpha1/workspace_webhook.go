@@ -25,7 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
-	ws "github.com/otterscale/tenant-operator/internal/workspace"
+	"github.com/otterscale/tenant-operator/internal/workspace"
 
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
@@ -54,30 +54,30 @@ type WorkspaceCustomDefaulter struct{}
 // Default implements admission.Defaulter[*tenantv1alpha1.Workspace] so a webhook will be registered for the Kind Workspace.
 // It ensures that labels with the prefix "user.otterscale.io/" mirror the current member subjects,
 // removing stale entries and preserving all other labels.
-func (d *WorkspaceCustomDefaulter) Default(ctx context.Context, workspace *tenantv1alpha1.Workspace) error {
-	log.FromContext(ctx).Info("Defaulting for Workspace", "name", workspace.GetName())
+func (d *WorkspaceCustomDefaulter) Default(ctx context.Context, ws *tenantv1alpha1.Workspace) error {
+	log.FromContext(ctx).Info("Defaulting for Workspace", "name", ws.GetName())
 
-	defaultMemberLabels(workspace)
+	defaultMemberLabels(ws)
 	return nil
 }
 
 // defaultMemberLabels synchronizes member subjects as labels on the Workspace.
 // Labels with the prefix "user.otterscale.io/" are managed; all other labels are preserved.
-func defaultMemberLabels(workspace *tenantv1alpha1.Workspace) {
-	labels := workspace.GetLabels()
+func defaultMemberLabels(ws *tenantv1alpha1.Workspace) {
+	labels := ws.GetLabels()
 	if labels == nil {
 		labels = make(map[string]string)
 	}
 
 	// Build desired user labels from spec
-	desired := make(map[string]struct{}, len(workspace.Spec.Members))
-	for _, m := range workspace.Spec.Members {
-		desired[ws.UserLabelPrefix+m.Subject] = struct{}{}
+	desired := make(map[string]struct{}, len(ws.Spec.Members))
+	for _, m := range ws.Spec.Members {
+		desired[workspace.UserLabelPrefix+m.Subject] = struct{}{}
 	}
 
 	// Remove stale user labels
 	for k := range labels {
-		if strings.HasPrefix(k, ws.UserLabelPrefix) {
+		if strings.HasPrefix(k, workspace.UserLabelPrefix) {
 			if _, ok := desired[k]; !ok {
 				delete(labels, k)
 			}
@@ -89,7 +89,7 @@ func defaultMemberLabels(workspace *tenantv1alpha1.Workspace) {
 		labels[k] = "true"
 	}
 
-	workspace.SetLabels(labels)
+	ws.SetLabels(labels)
 }
 
 // +kubebuilder:webhook:path=/validate-tenant-otterscale-io-v1alpha1-workspace,mutating=false,failurePolicy=fail,sideEffects=None,groups=tenant.otterscale.io,resources=workspaces,verbs=create;update;delete,versions=v1alpha1,name=vworkspace-v1alpha1.kb.io,admissionReviewVersions=v1
@@ -123,7 +123,7 @@ func (v *WorkspaceCustomValidator) ValidateUpdate(ctx context.Context, oldWorksp
 		return nil, fmt.Errorf("unable to retrieve admission request from context: %w", err)
 	}
 
-	if err := ws.AuthorizeModification(req.UserInfo, oldWorkspace, v.OperatorSA); err != nil {
+	if err := workspace.AuthorizeModification(req.UserInfo, oldWorkspace, v.OperatorSA); err != nil {
 		return nil, err
 	}
 
@@ -132,15 +132,15 @@ func (v *WorkspaceCustomValidator) ValidateUpdate(ctx context.Context, oldWorksp
 
 // ValidateDelete ensures only workspace admins (or privileged identities) can
 // delete a Workspace.
-func (v *WorkspaceCustomValidator) ValidateDelete(ctx context.Context, workspace *tenantv1alpha1.Workspace) (admission.Warnings, error) {
-	log.FromContext(ctx).Info("Validating Workspace deletion", "name", workspace.GetName())
+func (v *WorkspaceCustomValidator) ValidateDelete(ctx context.Context, ws *tenantv1alpha1.Workspace) (admission.Warnings, error) {
+	log.FromContext(ctx).Info("Validating Workspace deletion", "name", ws.GetName())
 
 	req, err := admission.RequestFromContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("unable to retrieve admission request from context: %w", err)
 	}
 
-	if err := ws.AuthorizeModification(req.UserInfo, workspace, v.OperatorSA); err != nil {
+	if err := workspace.AuthorizeModification(req.UserInfo, ws, v.OperatorSA); err != nil {
 		return nil, err
 	}
 
