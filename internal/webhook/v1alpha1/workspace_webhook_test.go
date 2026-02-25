@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	"context"
+	"maps"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -149,9 +150,7 @@ var _ = Describe("Workspace Webhook", func() {
 
 			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
 			firstLabels := make(map[string]string)
-			for k, v := range obj.Labels {
-				firstLabels[k] = v
-			}
+			maps.Copy(firstLabels, obj.Labels)
 
 			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
 			Expect(obj.Labels).To(Equal(firstLabels))

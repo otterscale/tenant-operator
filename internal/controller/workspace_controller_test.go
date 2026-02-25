@@ -61,7 +61,7 @@ var _ = Describe("Workspace Controller", func() {
 
 	// --- Helpers ---
 
-	toRawExtension := func(obj interface{}) *runtime.RawExtension {
+	toRawExtension := func(obj any) *runtime.RawExtension {
 		raw, err := json.Marshal(obj)
 		Expect(err).NotTo(HaveOccurred())
 		return &runtime.RawExtension{Raw: raw}

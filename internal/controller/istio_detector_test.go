@@ -52,13 +52,13 @@ var _ = Describe("IstioDetector", func() {
 
 			go func() {
 				defer close(done)
-				for i := 0; i < 1000; i++ {
+				for range 1000 {
 					detector.enabled.Store(true)
 					detector.enabled.Store(false)
 				}
 			}()
 
-			for i := 0; i < 1000; i++ {
+			for range 1000 {
 				_ = detector.IsEnabled()
 			}
 
