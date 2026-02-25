@@ -24,17 +24,14 @@ const (
 	// Name identifies the application name (Kubernetes Recommended Label).
 	Name = "app.kubernetes.io/name"
 
-	// ManagedBy identifies the tool/operator that manages the resource.
-	ManagedBy = "app.kubernetes.io/managed-by"
+	// Component identifies the component within the architecture (e.g. "module", "workspace").
+	Component = "app.kubernetes.io/component"
 
 	// PartOf identifies the higher-level application this resource belongs to.
 	PartOf = "app.kubernetes.io/part-of"
 
-	// Component identifies the component within the architecture (e.g. "module", "workspace").
-	Component = "app.kubernetes.io/component"
-
-	// Instance identifies a unique instance of the application (e.g. the CR name).
-	Instance = "app.kubernetes.io/instance"
+	// ManagedBy identifies the tool/operator that manages the resource.
+	ManagedBy = "app.kubernetes.io/managed-by"
 
 	// Version identifies the current version of the application.
 	Version = "app.kubernetes.io/version"
@@ -43,16 +40,12 @@ const (
 // Standard returns the base set of Kubernetes recommended labels for all
 // operator-managed resources. Domain-specific labels (e.g. module-template)
 // should be added by the caller after invoking this function.
-func Standard(name, instance, component, version string) map[string]string {
-	m := map[string]string{
-		Instance:  instance,
+func Standard(name, component, version string) map[string]string {
+	return map[string]string{
+		Name:      name,
 		Component: component,
 		PartOf:    "otterscale-system",
-		ManagedBy: "tenant-operator",
+		ManagedBy: "operator-template",
 		Version:   version,
 	}
-	if name != "" {
-		m[Name] = name
-	}
-	return m
 }

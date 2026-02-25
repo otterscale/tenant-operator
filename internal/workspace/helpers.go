@@ -42,7 +42,7 @@ const (
 
 // LabelsForWorkspace returns a standard set of labels for resources managed by this operator.
 func LabelsForWorkspace(workspace, version string) map[string]string {
-	return labels.Standard("", workspace, "workspace", version)
+	return labels.Standard(workspace, "workspace", version)
 }
 
 // IsOwned checks if the object is owned by the given UID to prevent adoption conflicts.
