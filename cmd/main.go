@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"cmp"
 	"crypto/tls"
 	"flag"
 	"os"
@@ -25,7 +26,6 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
-	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -36,8 +36,13 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
+	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+
 	"github.com/otterscale/tenant-operator/internal/controller"
 	webhookv1alpha1 "github.com/otterscale/tenant-operator/internal/webhook/v1alpha1"
+	"github.com/otterscale/tenant-operator/internal/workspace"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -49,7 +54,8 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-
+	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
+	utilruntime.Must(istiosecurityv1.AddToScheme(scheme))
 	utilruntime.Must(tenantv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -162,7 +168,7 @@ func main() {
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "76843774.otterscale.io",
+		LeaderElectionID:       "tenant-operator-leader-election",
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
@@ -181,15 +187,25 @@ func main() {
 	}
 
 	if err := (&controller.WorkspaceReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Version:  version,
+		Recorder: mgr.GetEventRecorder("workspace-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "Workspace")
 		os.Exit(1)
 	}
 	// nolint:goconst
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
-		if err := webhookv1alpha1.SetupWorkspaceWebhookWithManager(mgr); err != nil {
+		// Construct the operator's service account identity from environment variables
+		// injected via the Kubernetes Downward API (see config/manager/manager.yaml).
+		// This allows the validating webhook to exempt the operator's own reconciliation
+		// updates regardless of the namespace it is deployed in.
+		podNamespace := cmp.Or(os.Getenv("POD_NAMESPACE"), "otterscale-system")
+		podServiceAccount := cmp.Or(os.Getenv("POD_SERVICE_ACCOUNT"), "otterscale-operator-controller-manager")
+		operatorSA := workspace.OperatorServiceAccountIdentity(podNamespace, podServiceAccount)
+
+		if err := webhookv1alpha1.SetupWorkspaceWebhookWithManager(mgr, operatorSA); err != nil {
 			setupLog.Error(err, "Failed to create webhook", "webhook", "Workspace")
 			os.Exit(1)
 		}

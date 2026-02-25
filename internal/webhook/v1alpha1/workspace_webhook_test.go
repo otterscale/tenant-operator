@@ -17,70 +17,152 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"context"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
-	// TODO (user): Add any additional imports if needed
+	ws "github.com/otterscale/tenant-operator/internal/workspace"
 )
 
 var _ = Describe("Workspace Webhook", func() {
 	var (
 		obj       *tenantv1alpha1.Workspace
-		oldObj    *tenantv1alpha1.Workspace
-		validator WorkspaceCustomValidator
 		defaulter WorkspaceCustomDefaulter
 	)
 
 	BeforeEach(func() {
-		obj = &tenantv1alpha1.Workspace{}
-		oldObj = &tenantv1alpha1.Workspace{}
-		validator = WorkspaceCustomValidator{}
-		Expect(validator).NotTo(BeNil(), "Expected validator to be initialized")
+		obj = &tenantv1alpha1.Workspace{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-workspace"},
+			Spec: tenantv1alpha1.WorkspaceSpec{
+				Namespace: "test-ns",
+				Members: []tenantv1alpha1.WorkspaceMember{
+					{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "admin-user"},
+				},
+			},
+		}
 		defaulter = WorkspaceCustomDefaulter{}
-		Expect(defaulter).NotTo(BeNil(), "Expected defaulter to be initialized")
-		Expect(oldObj).NotTo(BeNil(), "Expected oldObj to be initialized")
-		Expect(obj).NotTo(BeNil(), "Expected obj to be initialized")
 	})
 
-	AfterEach(func() {
-		// TODO (user): Add any teardown logic common to all tests
+	Context("Member Label Synchronization", func() {
+		It("should mirror member subjects as labels on create", func() {
+			obj.Spec.Members = []tenantv1alpha1.WorkspaceMember{
+				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "admin-user"},
+				{Role: tenantv1alpha1.MemberRoleView, Subject: "view-user"},
+			}
+
+			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
+
+			Expect(obj.Labels).To(HaveKeyWithValue(ws.UserLabelPrefix+"admin-user", "true"))
+			Expect(obj.Labels).To(HaveKeyWithValue(ws.UserLabelPrefix+"view-user", "true"))
+		})
+
+		It("should remove stale user labels when members are removed", func() {
+			obj.Labels = map[string]string{
+				ws.UserLabelPrefix + "admin-user":   "true",
+				ws.UserLabelPrefix + "removed-user": "true",
+			}
+			obj.Spec.Members = []tenantv1alpha1.WorkspaceMember{
+				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "admin-user"},
+			}
+
+			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
+
+			Expect(obj.Labels).To(HaveKeyWithValue(ws.UserLabelPrefix+"admin-user", "true"))
+			Expect(obj.Labels).NotTo(HaveKey(ws.UserLabelPrefix + "removed-user"))
+		})
+
+		It("should correctly sync labels when member list is completely replaced", func() {
+			obj.Labels = map[string]string{
+				ws.UserLabelPrefix + "old-admin": "true",
+				ws.UserLabelPrefix + "old-view":  "true",
+			}
+			obj.Spec.Members = []tenantv1alpha1.WorkspaceMember{
+				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "new-admin"},
+				{Role: tenantv1alpha1.MemberRoleEdit, Subject: "new-editor"},
+			}
+
+			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
+
+			Expect(obj.Labels).To(HaveKeyWithValue(ws.UserLabelPrefix+"new-admin", "true"))
+			Expect(obj.Labels).To(HaveKeyWithValue(ws.UserLabelPrefix+"new-editor", "true"))
+			Expect(obj.Labels).NotTo(HaveKey(ws.UserLabelPrefix + "old-admin"))
+			Expect(obj.Labels).NotTo(HaveKey(ws.UserLabelPrefix + "old-view"))
+		})
+
+		It("should preserve non-user custom labels", func() {
+			obj.Labels = map[string]string{
+				"my-custom-label":                 "my-custom-value",
+				"another-label":                   "another-value",
+				ws.UserLabelPrefix + "stale-user": "true",
+			}
+			obj.Spec.Members = []tenantv1alpha1.WorkspaceMember{
+				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "admin-user"},
+			}
+
+			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
+
+			Expect(obj.Labels).To(HaveKeyWithValue("my-custom-label", "my-custom-value"))
+			Expect(obj.Labels).To(HaveKeyWithValue("another-label", "another-value"))
+			Expect(obj.Labels).To(HaveKeyWithValue(ws.UserLabelPrefix+"admin-user", "true"))
+			Expect(obj.Labels).NotTo(HaveKey(ws.UserLabelPrefix + "stale-user"))
+		})
+
+		It("should handle workspace with nil labels", func() {
+			obj.Labels = nil
+			obj.Spec.Members = []tenantv1alpha1.WorkspaceMember{
+				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "admin-user"},
+			}
+
+			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
+
+			Expect(obj.Labels).To(HaveKeyWithValue(ws.UserLabelPrefix+"admin-user", "true"))
+		})
+
+		It("should handle members with special characters in their subject", func() {
+			obj.Spec.Members = []tenantv1alpha1.WorkspaceMember{
+				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "user.example.com"},
+			}
+
+			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
+
+			Expect(obj.Labels).To(HaveKeyWithValue(ws.UserLabelPrefix+"user.example.com", "true"))
+		})
+
+		It("should handle empty members slice without panic", func() {
+			obj.Spec.Members = []tenantv1alpha1.WorkspaceMember{}
+
+			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
+
+			for k := range obj.Labels {
+				Expect(k).NotTo(HavePrefix(ws.UserLabelPrefix))
+			}
+		})
+
+		It("should be idempotent across multiple invocations", func() {
+			obj.Spec.Members = []tenantv1alpha1.WorkspaceMember{
+				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "admin-user"},
+				{Role: tenantv1alpha1.MemberRoleView, Subject: "view-user"},
+			}
+
+			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
+			firstLabels := make(map[string]string)
+			for k, v := range obj.Labels {
+				firstLabels[k] = v
+			}
+
+			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
+			Expect(obj.Labels).To(Equal(firstLabels))
+		})
+
 	})
 
-	Context("When creating Workspace under Defaulting Webhook", func() {
-		// TODO (user): Add logic for defaulting webhooks
-		// Example:
-		// It("Should apply defaults when a required field is empty", func() {
-		//     By("simulating a scenario where defaults should be applied")
-		//     obj.SomeFieldWithDefault = ""
-		//     By("calling the Default method to apply defaults")
-		//     defaulter.Default(ctx, obj)
-		//     By("checking that the default values are set")
-		//     Expect(obj.SomeFieldWithDefault).To(Equal("default_value"))
-		// })
-	})
-
-	Context("When creating or updating Workspace under Validating Webhook", func() {
-		// TODO (user): Add logic for validating webhooks
-		// Example:
-		// It("Should deny creation if a required field is missing", func() {
-		//     By("simulating an invalid creation scenario")
-		//     obj.SomeRequiredField = ""
-		//     Expect(validator.ValidateCreate(ctx, obj)).Error().To(HaveOccurred())
-		// })
-		//
-		// It("Should admit creation if all required fields are present", func() {
-		//     By("simulating an invalid creation scenario")
-		//     obj.SomeRequiredField = "valid_value"
-		//     Expect(validator.ValidateCreate(ctx, obj)).To(BeNil())
-		// })
-		//
-		// It("Should validate updates correctly", func() {
-		//     By("simulating a valid update scenario")
-		//     oldObj.SomeRequiredField = "updated_value"
-		//     obj.SomeRequiredField = "updated_value"
-		//     Expect(validator.ValidateUpdate(ctx, oldObj, obj)).To(BeNil())
-		// })
-	})
+	// NOTE: Type-assertion guard tests have been removed because the webhook
+	// methods now use the generic typed interface (admission.Defaulter[*Workspace]
+	// / admission.Validator[*Workspace]), so the compiler enforces type safety at
+	// build time. Workspace authorization (admin-only update/delete) is exercised
+	// via pure Go unit tests in internal/core/workspace/authorization_test.go.
 
 })
