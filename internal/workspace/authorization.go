@@ -17,10 +17,13 @@ limitations under the License.
 package workspace
 
 import (
+	"context"
 	"fmt"
 	"slices"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
 )
@@ -37,21 +40,27 @@ func OperatorServiceAccountIdentity(namespace, saName string) string {
 // authorization checks (cluster super-admins).
 var privilegedGroups = []string{"system:masters", "kubeadm:cluster-admins"}
 
+// privilegedClusterRoles are Kubernetes ClusterRoles whose bound subjects
+// bypass all workspace-level authorization checks.
+var privilegedClusterRoles = []string{"cluster-admin"}
+
 // AuthorizeModification checks whether the requesting user is allowed to
 // update the given Workspace. The workspace parameter must be the **old**
 // (pre-update) object so that a user cannot grant themselves admin and
 // approve in the same request.
 //
+// reader is used to list ClusterRoleBindings for privileged ClusterRole checks.
 // operatorSA is the full service account identity of the controller-manager
 // (e.g. "system:serviceaccount:otterscale-system:tenant-operator-controller-manager").
 // It is provided at startup so the operator works regardless of the namespace it is deployed in.
 //
-// Allowed callers:
+// Allowed callers (checked cheapest-first):
 //   - Members of a privileged group (system:masters, kubeadm:cluster-admins)
 //   - The operator's own ServiceAccount (operatorSA)
 //   - A workspace member whose role is "admin" in the current (old) spec
-func AuthorizeModification(userInfo authenticationv1.UserInfo, workspace *tenantv1alpha1.Workspace, operatorSA string) error {
-	if isPrivileged(userInfo) {
+//   - A user bound to a privileged ClusterRole (e.g. cluster-admin) via ClusterRoleBinding
+func AuthorizeModification(ctx context.Context, reader client.Reader, userInfo authenticationv1.UserInfo, workspace *tenantv1alpha1.Workspace, operatorSA string) error {
+	if inPrivilegedGroup(userInfo) {
 		return nil
 	}
 
@@ -63,11 +72,52 @@ func AuthorizeModification(userInfo authenticationv1.UserInfo, workspace *tenant
 		return nil
 	}
 
+	ok, err := hasPrivilegedClusterRole(ctx, reader, userInfo)
+	if err != nil {
+		return fmt.Errorf("failed to check ClusterRole bindings: %w", err)
+	}
+	if ok {
+		return nil
+	}
+
 	return fmt.Errorf("only users with the 'admin' role defined in this workspace can modify or delete it")
 }
 
-// isPrivileged returns true if the user belongs to any privileged group.
-func isPrivileged(userInfo authenticationv1.UserInfo) bool {
+func hasPrivilegedClusterRole(ctx context.Context, reader client.Reader, userInfo authenticationv1.UserInfo) (bool, error) {
+	var bindings rbacv1.ClusterRoleBindingList
+	if err := reader.List(ctx, &bindings); err != nil {
+		return false, err
+	}
+
+	for i := range bindings.Items {
+		b := &bindings.Items[i]
+		if b.RoleRef.Kind != "ClusterRole" || !slices.Contains(privilegedClusterRoles, b.RoleRef.Name) {
+			continue
+		}
+		for _, subject := range b.Subjects {
+			if matchesSubject(subject, userInfo) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func matchesSubject(subject rbacv1.Subject, userInfo authenticationv1.UserInfo) bool {
+	switch subject.Kind {
+	case rbacv1.UserKind:
+		return subject.Name == userInfo.Username
+	case rbacv1.ServiceAccountKind:
+		sa := "system:serviceaccount:" + subject.Namespace + ":" + subject.Name
+		return sa == userInfo.Username
+	case rbacv1.GroupKind:
+		return slices.Contains(userInfo.Groups, subject.Name)
+	}
+	return false
+}
+
+// inPrivilegedGroup returns true if the user belongs to any privileged group.
+func inPrivilegedGroup(userInfo authenticationv1.UserInfo) bool {
 	for _, g := range userInfo.Groups {
 		if slices.Contains(privilegedGroups, g) {
 			return true

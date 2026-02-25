@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
@@ -37,7 +38,10 @@ import (
 func SetupWorkspaceWebhookWithManager(mgr ctrl.Manager, operatorSA string) error {
 	return ctrl.NewWebhookManagedBy(mgr, &tenantv1alpha1.Workspace{}).
 		WithDefaulter(&WorkspaceCustomDefaulter{}).
-		WithValidator(&WorkspaceCustomValidator{OperatorSA: operatorSA}).
+		WithValidator(&WorkspaceCustomValidator{
+			OperatorSA: operatorSA,
+			Reader:     mgr.GetClient(),
+		}).
 		Complete()
 }
 
@@ -96,14 +100,17 @@ func defaultMemberLabels(ws *tenantv1alpha1.Workspace) {
 
 // WorkspaceCustomValidator enforces workspace-level authorization on mutating
 // operations. Only workspace members with the "admin" role (or cluster-level
-// privileged identities) are permitted to update or delete a Workspace.
+// privileged identities, including users bound to the cluster-admin ClusterRole)
+// are permitted to update or delete a Workspace.
 //
-// The authorization logic itself is kept in internal/core/workspace/ for
+// The authorization logic itself is kept in internal/workspace/ for
 // testability; this validator is intentionally thin.
 type WorkspaceCustomValidator struct {
 	// OperatorSA is the full service account identity of the controller-manager.
 	// It is injected at startup so the operator works regardless of the namespace it is deployed in.
 	OperatorSA string
+	// Reader is used to look up ClusterRoleBindings for privileged ClusterRole checks.
+	Reader client.Reader
 }
 
 // ValidateCreate is a no-op. Any authenticated user that passes RBAC is allowed
@@ -123,11 +130,7 @@ func (v *WorkspaceCustomValidator) ValidateUpdate(ctx context.Context, oldWorksp
 		return nil, fmt.Errorf("unable to retrieve admission request from context: %w", err)
 	}
 
-	if err := workspace.AuthorizeModification(req.UserInfo, oldWorkspace, v.OperatorSA); err != nil {
-		return nil, err
-	}
-
-	return nil, nil
+	return nil, workspace.AuthorizeModification(ctx, v.Reader, req.UserInfo, oldWorkspace, v.OperatorSA)
 }
 
 // ValidateDelete ensures only workspace admins (or privileged identities) can
@@ -140,9 +143,5 @@ func (v *WorkspaceCustomValidator) ValidateDelete(ctx context.Context, ws *tenan
 		return nil, fmt.Errorf("unable to retrieve admission request from context: %w", err)
 	}
 
-	if err := workspace.AuthorizeModification(req.UserInfo, ws, v.OperatorSA); err != nil {
-		return nil, err
-	}
-
-	return nil, nil
+	return nil, workspace.AuthorizeModification(ctx, v.Reader, req.UserInfo, ws, v.OperatorSA)
 }

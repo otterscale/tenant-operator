@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
+	rbacv1 "k8s.io/api/rbac/v1"
 )
 
 var _ = Describe("Workspace Controller - CEL Validation", func() {
@@ -132,6 +133,31 @@ var _ = Describe("Workspace Controller - CEL Validation", func() {
 
 			w.Spec.NetworkIsolation.Enabled = true
 			Expect(adminClient.Update(ctx, &w)).To(Succeed())
+		})
+
+		It("should allow user bound to cluster-admin ClusterRole to update workspace", func() {
+			binding := &rbacv1.ClusterRoleBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-cluster-admin-" + resourceName},
+				RoleRef: rbacv1.RoleRef{
+					APIGroup: rbacv1.GroupName,
+					Kind:     "ClusterRole",
+					Name:     "cluster-admin",
+				},
+				Subjects: []rbacv1.Subject{
+					{Kind: rbacv1.UserKind, Name: "cluster-admin-user", APIGroup: rbacv1.GroupName},
+				},
+			}
+			Expect(k8sClient.Create(ctx, binding)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, binding) }()
+
+			caClient := createImpersonatedClient("cluster-admin-user", []string{"system:authenticated"})
+
+			nsName := types.NamespacedName{Name: resourceName}
+			var w tenantv1alpha1.Workspace
+			Expect(k8sClient.Get(ctx, nsName, &w)).To(Succeed())
+
+			w.Spec.NetworkIsolation.Enabled = true
+			Expect(caClient.Update(ctx, &w)).To(Succeed())
 		})
 	})
 
