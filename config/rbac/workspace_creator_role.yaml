@@ -1,0 +1,33 @@
+# Grants self-service workspace creation and read-only access to Workspace resources.
+# This role is bound to system:authenticated by default so that any authenticated
+# user can create their own workspace. Write operations (update/delete) on existing
+# workspaces require the cluster admin to explicitly grant workspace-editor-role or
+# workspace-admin-role.
+#
+# Defense-in-depth: even for CREATE, the validating webhook enforces that the
+# caller is listed as an admin member (self-enrollment) and respects the
+# per-user workspace quota.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: tenant-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: workspace-creator-role
+rules:
+- apiGroups:
+  - tenant.otterscale.io
+  resources:
+  - workspaces
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - tenant.otterscale.io
+  resources:
+  - workspaces/status
+  verbs:
+  - get

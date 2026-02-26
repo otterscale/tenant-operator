@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"cmp"
 	"crypto/tls"
 	"flag"
 	"os"
@@ -34,6 +35,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+
+	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
+	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+
+	"github.com/otterscale/tenant-operator/internal/controller"
+	webhookv1alpha1 "github.com/otterscale/tenant-operator/internal/webhook/v1alpha1"
+	"github.com/otterscale/tenant-operator/internal/workspace"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -43,9 +52,16 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 )
 
+const (
+	operatorNamespace      = "otterscale-system"
+	operatorServiceAccount = "tenant-operator-controller-manager"
+)
+
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-
+	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
+	utilruntime.Must(istiosecurityv1.AddToScheme(scheme))
+	utilruntime.Must(tenantv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -58,6 +74,7 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var maxWorkspacesPerUser int
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -76,6 +93,8 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.IntVar(&maxWorkspacesPerUser, "max-workspaces-per-user", 3,
+		"Maximum number of workspaces a regular user may administer. 0 disables quota enforcement.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -83,6 +102,8 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	setupLog.Info("Starting manager", "version", version)
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -157,7 +178,7 @@ func main() {
 		WebhookServer:          webhookServer,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "76843774.otterscale.io",
+		LeaderElectionID:       "tenant-operator-leader-election",
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
@@ -175,6 +196,30 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := (&controller.WorkspaceReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Version:  version,
+		Recorder: mgr.GetEventRecorder("workspace-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "Workspace")
+		os.Exit(1)
+	}
+	// nolint:goconst
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		// Construct the operator's service account identity from environment variables
+		// injected via the Kubernetes Downward API (see config/manager/manager.yaml).
+		// This allows the validating webhook to exempt the operator's own reconciliation
+		// updates regardless of the namespace it is deployed in.
+		podNamespace := cmp.Or(os.Getenv("POD_NAMESPACE"), operatorNamespace)
+		podServiceAccount := cmp.Or(os.Getenv("POD_SERVICE_ACCOUNT"), operatorServiceAccount)
+		operatorSA := workspace.OperatorServiceAccountIdentity(podNamespace, podServiceAccount)
+
+		if err := webhookv1alpha1.SetupWorkspaceWebhookWithManager(mgr, operatorSA, maxWorkspacesPerUser); err != nil {
+			setupLog.Error(err, "Failed to create webhook", "webhook", "Workspace")
+			os.Exit(1)
+		}
+	}
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

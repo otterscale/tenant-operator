@@ -8,6 +8,19 @@ layout:
 - go.kubebuilder.io/v4
 plugins:
   autoupdate.kubebuilder.io/v1-alpha: {}
-projectName: operator-template
-repo: github.com/otterscale/operator-template
+projectName: tenant-operator
+repo: github.com/otterscale/tenant-operator
+resources:
+- controller: true
+  domain: otterscale.io
+  external: true
+  group: tenant
+  kind: Workspace
+  module: github.com/otterscale/api
+  path: github.com/otterscale/api/tenant/v1alpha1
+  version: v1alpha1
+  webhooks:
+    defaulting: true
+    validation: true
+    webhookVersion: v1
 version: "3"

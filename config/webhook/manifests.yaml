@@ -1,0 +1,53 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: mutating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /mutate-tenant-otterscale-io-v1alpha1-workspace
+  failurePolicy: Fail
+  name: mworkspace-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - tenant.otterscale.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - workspaces
+  sideEffects: None
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: validating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-tenant-otterscale-io-v1alpha1-workspace
+  failurePolicy: Fail
+  name: vworkspace-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - tenant.otterscale.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - workspaces
+  sideEffects: None
