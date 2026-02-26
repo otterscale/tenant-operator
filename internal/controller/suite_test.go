@@ -181,22 +181,6 @@ func getFirstFoundEnvTestBinaryDir() string {
 	return ""
 }
 
-func applyManifests(dir string) {
-	files, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
-		logf.Log.Info("Manifest directory does not exist, skipping", "path", dir)
-		return
-	}
-	Expect(err).NotTo(HaveOccurred())
-
-	for _, f := range files {
-		if filepath.Ext(f.Name()) != ".yaml" || f.Name() == "kustomization.yaml" {
-			continue
-		}
-		applyManifest(filepath.Join(dir, f.Name()))
-	}
-}
-
 func applyManifest(path string) {
 	file, err := os.Open(path)
 	Expect(err).NotTo(HaveOccurred())
