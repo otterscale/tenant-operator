@@ -1,3 +1,10 @@
+# Binds workspace-editor-role to all authenticated users, granting self-service
+# workspace management. RBAC is intentionally broad here because Workspace is
+# cluster-scoped and RBAC cannot distinguish between individual Workspace
+# instances — fine-grained authorization is handled by the validating webhook,
+# which enforces that only workspace admin members can modify or delete a
+# workspace, and respects the per-user quota for creation.
+
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -8,7 +15,7 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: workspace-creator-role
+  name: workspace-editor-role
 subjects:
 - kind: Group
   name: system:authenticated
