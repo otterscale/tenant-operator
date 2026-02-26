@@ -147,28 +147,7 @@ var _ = BeforeSuite(func() {
 	}).Should(Succeed())
 
 	applyManifest(filepath.Join("..", "..", "config", "rbac", "workspace_editor_role.yaml"))
-	applyManifest(filepath.Join("..", "..", "config", "rbac", "workspace_creator_role.yaml"))
 	applyManifest(filepath.Join("..", "..", "config", "rbac", "workspace_binding.yaml"))
-
-	// Grant workspace-editor-role to all authenticated users in the test
-	// environment so that update/delete requests reach the webhook.
-	// In production the cluster admin binds this role to specific users.
-	testEditorBinding := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "rbac.authorization.k8s.io/v1",
-		"kind":       "ClusterRoleBinding",
-		"metadata":   map[string]any{"name": "test-workspace-editor-binding"},
-		"roleRef": map[string]any{
-			"apiGroup": "rbac.authorization.k8s.io",
-			"kind":     "ClusterRole",
-			"name":     "workspace-editor-role",
-		},
-		"subjects": []any{map[string]any{
-			"kind":     "Group",
-			"name":     "system:authenticated",
-			"apiGroup": "rbac.authorization.k8s.io",
-		}},
-	}}
-	Expect(k8sClient.Create(ctx, testEditorBinding)).To(Succeed())
 })
 
 var _ = AfterSuite(func() {
