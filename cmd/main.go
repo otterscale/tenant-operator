@@ -52,6 +52,11 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 )
 
+const (
+	operatorNamespace      = "otterscale-system"
+	operatorServiceAccount = "tenant-operator-controller-manager"
+)
+
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
@@ -203,8 +208,8 @@ func main() {
 		// injected via the Kubernetes Downward API (see config/manager/manager.yaml).
 		// This allows the validating webhook to exempt the operator's own reconciliation
 		// updates regardless of the namespace it is deployed in.
-		podNamespace := cmp.Or(os.Getenv("POD_NAMESPACE"), "otterscale-system")
-		podServiceAccount := cmp.Or(os.Getenv("POD_SERVICE_ACCOUNT"), "tenant-operator-controller-manager")
+		podNamespace := cmp.Or(os.Getenv("POD_NAMESPACE"), operatorNamespace)
+		podServiceAccount := cmp.Or(os.Getenv("POD_SERVICE_ACCOUNT"), operatorServiceAccount)
 		operatorSA := workspace.OperatorServiceAccountIdentity(podNamespace, podServiceAccount)
 
 		if err := webhookv1alpha1.SetupWorkspaceWebhookWithManager(mgr, operatorSA); err != nil {
