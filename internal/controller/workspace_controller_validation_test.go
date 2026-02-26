@@ -62,19 +62,110 @@ var _ = Describe("Workspace Controller - CEL Validation", func() {
 		}
 	})
 
-	Context("Admission Policy - Service Account Exemption", func() {
-		const controllerServiceAccount = "system:serviceaccount:otterscale-system:tenant-operator-controller-manager"
-
-		createImpersonatedClient := func(user string, groups []string) client.Client {
-			cfgCopy := *cfg
-			if groups == nil {
-				groups = []string{"system:authenticated"}
-			}
-			cfgCopy.Impersonate = rest.ImpersonationConfig{UserName: user, Groups: groups}
-			c, err := client.New(&cfgCopy, client.Options{Scheme: k8sClient.Scheme()})
-			Expect(err).NotTo(HaveOccurred())
-			return c
+	createImpersonatedClient := func(user string, groups []string) client.Client {
+		cfgCopy := *cfg
+		if groups == nil {
+			groups = []string{"system:authenticated"}
 		}
+		cfgCopy.Impersonate = rest.ImpersonationConfig{UserName: user, Groups: groups}
+		c, err := client.New(&cfgCopy, client.Options{Scheme: k8sClient.Scheme()})
+		Expect(err).NotTo(HaveOccurred())
+		return c
+	}
+
+	Context("Admission Policy - Create Authorization", func() {
+		It("should allow creation when creator is listed as admin", func() {
+			userClient := createImpersonatedClient("alice", nil)
+			workspace = &tenantv1alpha1.Workspace{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: tenantv1alpha1.WorkspaceSpec{
+					Namespace: string(uuid.NewUUID()),
+					Members: []tenantv1alpha1.WorkspaceMember{
+						{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
+					},
+				},
+			}
+			Expect(userClient.Create(ctx, workspace)).To(Succeed())
+		})
+
+		It("should deny creation when creator is not listed as admin", func() {
+			userClient := createImpersonatedClient("mallory", nil)
+			workspace = &tenantv1alpha1.Workspace{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: tenantv1alpha1.WorkspaceSpec{
+					Namespace: string(uuid.NewUUID()),
+					Members: []tenantv1alpha1.WorkspaceMember{
+						{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "someone-else"},
+					},
+				},
+			}
+			err := userClient.Create(ctx, workspace)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("workspace creator must be listed as a member with the 'admin' role"))
+		})
+
+		It("should deny creation when creator is listed as edit only", func() {
+			userClient := createImpersonatedClient("bob", nil)
+			workspace = &tenantv1alpha1.Workspace{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: tenantv1alpha1.WorkspaceSpec{
+					Namespace: string(uuid.NewUUID()),
+					Members: []tenantv1alpha1.WorkspaceMember{
+						{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "someone-else"},
+						{Role: tenantv1alpha1.MemberRoleEdit, Subject: "bob"},
+					},
+				},
+			}
+			err := userClient.Create(ctx, workspace)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("workspace creator must be listed as a member with the 'admin' role"))
+		})
+
+		It("should allow system:masters to create workspace for others", func() {
+			masterClient := createImpersonatedClient("cluster-admin", []string{"system:masters"})
+			workspace = &tenantv1alpha1.Workspace{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: tenantv1alpha1.WorkspaceSpec{
+					Namespace: string(uuid.NewUUID()),
+					Members: []tenantv1alpha1.WorkspaceMember{
+						{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "someone-else"},
+					},
+				},
+			}
+			Expect(masterClient.Create(ctx, workspace)).To(Succeed())
+		})
+
+		It("should allow user bound to cluster-admin ClusterRole to create workspace for others", func() {
+			binding := &rbacv1.ClusterRoleBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-cluster-admin-create-" + resourceName},
+				RoleRef: rbacv1.RoleRef{
+					APIGroup: rbacv1.GroupName,
+					Kind:     "ClusterRole",
+					Name:     "cluster-admin",
+				},
+				Subjects: []rbacv1.Subject{
+					{Kind: rbacv1.UserKind, Name: "cluster-admin-user", APIGroup: rbacv1.GroupName},
+				},
+			}
+			Expect(k8sClient.Create(ctx, binding)).To(Succeed())
+			defer func() { _ = k8sClient.Delete(ctx, binding) }()
+
+			caClient := createImpersonatedClient("cluster-admin-user", nil)
+			workspace = &tenantv1alpha1.Workspace{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: tenantv1alpha1.WorkspaceSpec{
+					Namespace: string(uuid.NewUUID()),
+					Members: []tenantv1alpha1.WorkspaceMember{
+						{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "someone-else"},
+					},
+				},
+			}
+			Expect(caClient.Create(ctx, workspace)).To(Succeed())
+		})
+	})
+
+	Context("Admission Policy - Update/Delete Authorization", func() {
+		const controllerServiceAccount = "system:serviceaccount:otterscale-system:tenant-operator-controller-manager"
 
 		BeforeEach(func() {
 			workspace = &tenantv1alpha1.Workspace{

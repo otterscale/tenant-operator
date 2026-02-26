@@ -35,12 +35,15 @@ import (
 // operatorSA is the full service account identity of the controller-manager
 // (e.g. "system:serviceaccount:otterscale-system:tenant-operator-controller-manager")
 // used to exempt the operator's own reconciliation updates from workspace-level authorization.
-func SetupWorkspaceWebhookWithManager(mgr ctrl.Manager, operatorSA string) error {
+// maxWorkspacesPerUser limits the number of workspaces a regular user may administer;
+// 0 disables quota enforcement.
+func SetupWorkspaceWebhookWithManager(mgr ctrl.Manager, operatorSA string, maxWorkspacesPerUser int) error {
 	return ctrl.NewWebhookManagedBy(mgr, &tenantv1alpha1.Workspace{}).
 		WithDefaulter(&WorkspaceCustomDefaulter{}).
 		WithValidator(&WorkspaceCustomValidator{
-			OperatorSA: operatorSA,
-			Reader:     mgr.GetClient(),
+			OperatorSA:           operatorSA,
+			MaxWorkspacesPerUser: maxWorkspacesPerUser,
+			Reader:               mgr.GetClient(),
 		}).
 		Complete()
 }
@@ -98,10 +101,10 @@ func defaultMemberLabels(ws *tenantv1alpha1.Workspace) {
 
 // +kubebuilder:webhook:path=/validate-tenant-otterscale-io-v1alpha1-workspace,mutating=false,failurePolicy=fail,sideEffects=None,groups=tenant.otterscale.io,resources=workspaces,verbs=create;update;delete,versions=v1alpha1,name=vworkspace-v1alpha1.kb.io,admissionReviewVersions=v1
 
-// WorkspaceCustomValidator enforces workspace-level authorization on mutating
-// operations. Only workspace members with the "admin" role (or cluster-level
-// privileged identities, including users bound to the cluster-admin ClusterRole)
-// are permitted to update or delete a Workspace.
+// WorkspaceCustomValidator enforces workspace-level authorization on all
+// mutating operations. Create requests require the caller to list themselves
+// as an admin member and pass the per-user quota. Update and delete requests
+// require workspace-admin (or cluster-level privileged) identity.
 //
 // The authorization logic itself is kept in internal/workspace/ for
 // testability; this validator is intentionally thin.
@@ -109,14 +112,26 @@ type WorkspaceCustomValidator struct {
 	// OperatorSA is the full service account identity of the controller-manager.
 	// It is injected at startup so the operator works regardless of the namespace it is deployed in.
 	OperatorSA string
-	// Reader is used to look up ClusterRoleBindings for privileged ClusterRole checks.
+	// MaxWorkspacesPerUser limits how many workspaces a regular user may
+	// administer. 0 disables quota enforcement.
+	MaxWorkspacesPerUser int
+	// Reader is used to look up ClusterRoleBindings and existing Workspaces.
 	Reader client.Reader
 }
 
-// ValidateCreate is a no-op. Any authenticated user that passes RBAC is allowed
-// to create a Workspace; there is no ownership to protect yet.
-func (v *WorkspaceCustomValidator) ValidateCreate(_ context.Context, _ *tenantv1alpha1.Workspace) (admission.Warnings, error) {
-	return nil, nil
+// ValidateCreate ensures the requesting user is listed as an admin member
+// of the new Workspace and has not exceeded the per-user workspace quota.
+// Privileged callers (system:masters, operator SA, cluster-admin) bypass
+// both checks.
+func (v *WorkspaceCustomValidator) ValidateCreate(ctx context.Context, ws *tenantv1alpha1.Workspace) (admission.Warnings, error) {
+	log.FromContext(ctx).Info("Validating Workspace creation", "name", ws.GetName())
+
+	req, err := admission.RequestFromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("unable to retrieve admission request from context: %w", err)
+	}
+
+	return nil, workspace.AuthorizeCreation(ctx, v.Reader, req.UserInfo, ws, v.OperatorSA, v.MaxWorkspacesPerUser)
 }
 
 // ValidateUpdate ensures only workspace admins (or privileged identities) can
