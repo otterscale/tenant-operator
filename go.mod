@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/onsi/ginkgo/v2 v2.28.1
 	github.com/onsi/gomega v1.39.1
-	github.com/otterscale/api v0.8.5
+	github.com/otterscale/api v0.8.9
 	istio.io/api v1.29.0
 	istio.io/client-go v1.29.0
 	k8s.io/api v0.35.1
