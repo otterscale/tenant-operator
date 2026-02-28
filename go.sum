@@ -129,8 +129,8 @@ github.com/onsi/ginkgo/v2 v2.28.1 h1:S4hj+HbZp40fNKuLUQOYLDgZLwNUVn19N3Atb98NCyI
 github.com/onsi/ginkgo/v2 v2.28.1/go.mod h1:CLtbVInNckU3/+gC8LzkGUb9oF+e8W8TdUsxPwvdOgE=
 github.com/onsi/gomega v1.39.1 h1:1IJLAad4zjPn2PsnhH70V4DKRFlrCzGBNrNaru+Vf28=
 github.com/onsi/gomega v1.39.1/go.mod h1:hL6yVALoTOxeWudERyfppUcZXjMwIMLnuSfruD2lcfg=
-github.com/otterscale/api v0.8.9 h1:G4Rrl/XFgj85pQ0i/qKwRfS4h0wLrMiBEjygHYmJEew=
-github.com/otterscale/api v0.8.9/go.mod h1:W1eJXksjk0ueweHLkcrva5CxJ8gO8V7XghohePWTUq0=
+github.com/otterscale/api v0.8.11 h1:3mpi3tzddJ1H9SucKP8GK1PdvW+dfhSTby25WpiYGu8=
+github.com/otterscale/api v0.8.11/go.mod h1:W1eJXksjk0ueweHLkcrva5CxJ8gO8V7XghohePWTUq0=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
