@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package workspace
+package workspace_test
 
 import (
 	"context"
@@ -31,6 +31,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
+
+	"github.com/otterscale/tenant-operator/internal/workspace"
 )
 
 const testOperatorSA = "system:serviceaccount:test-system:test-controller-manager"
@@ -42,7 +44,7 @@ func newWorkspace(members []tenantv1alpha1.WorkspaceMember) *tenantv1alpha1.Work
 func newWorkspaceWithName(name, namespace string, members []tenantv1alpha1.WorkspaceMember) *tenantv1alpha1.Workspace {
 	labels := make(map[string]string, len(members))
 	for _, m := range members {
-		labels[UserLabelPrefix+m.Subject] = "true"
+		labels[workspace.UserLabelPrefix+m.Subject] = "true"
 	}
 	return &tenantv1alpha1.Workspace{
 		ObjectMeta: metav1.ObjectMeta{
@@ -67,7 +69,7 @@ func newFakeReader(objs ...runtime.Object) client.Reader {
 
 var _ = Describe("OperatorServiceAccountIdentity", func() {
 	It("should compose the canonical service account username", func() {
-		got := OperatorServiceAccountIdentity("otterscale-system", "tenant-operator-controller-manager")
+		got := workspace.OperatorServiceAccountIdentity("otterscale-system", "tenant-operator-controller-manager")
 		Expect(got).To(Equal("system:serviceaccount:otterscale-system:tenant-operator-controller-manager"))
 	})
 })
@@ -106,7 +108,7 @@ var _ = Describe("AuthorizeCreation", func() {
 
 		DescribeTable("should allow or deny based on caller identity",
 			func(user authenticationv1.UserInfo, shouldSucceed bool) {
-				err := AuthorizeCreation(ctx, reader, user, ws, testOperatorSA, 0)
+				err := workspace.AuthorizeCreation(ctx, reader, user, ws, testOperatorSA, 0)
 				if shouldSucceed {
 					Expect(err).NotTo(HaveOccurred())
 				} else {
@@ -154,7 +156,7 @@ var _ = Describe("AuthorizeCreation", func() {
 
 		DescribeTable("should enforce per-user workspace quota",
 			func(maxPerUser int, shouldSucceed bool) {
-				err := AuthorizeCreation(ctx, reader, alice, ws, testOperatorSA, maxPerUser)
+				err := workspace.AuthorizeCreation(ctx, reader, alice, ws, testOperatorSA, maxPerUser)
 				if shouldSucceed {
 					Expect(err).NotTo(HaveOccurred())
 				} else {
@@ -190,12 +192,12 @@ var _ = Describe("AuthorizeCreation", func() {
 		})
 
 		It("should allow when admin count is below quota", func() {
-			err := AuthorizeCreation(ctx, reader, authenticationv1.UserInfo{Username: "alice"}, ws, testOperatorSA, 2)
+			err := workspace.AuthorizeCreation(ctx, reader, authenticationv1.UserInfo{Username: "alice"}, ws, testOperatorSA, 2)
 			Expect(err).NotTo(HaveOccurred())
 		})
 
 		It("should deny when admin count meets quota", func() {
-			err := AuthorizeCreation(ctx, reader, authenticationv1.UserInfo{Username: "alice"}, ws, testOperatorSA, 1)
+			err := workspace.AuthorizeCreation(ctx, reader, authenticationv1.UserInfo{Username: "alice"}, ws, testOperatorSA, 1)
 			Expect(err).To(HaveOccurred())
 		})
 	})
@@ -220,7 +222,7 @@ var _ = Describe("AuthorizeCreation", func() {
 		})
 
 		It("should bypass quota for privileged group", func() {
-			err := AuthorizeCreation(ctx, reader, authenticationv1.UserInfo{
+			err := workspace.AuthorizeCreation(ctx, reader, authenticationv1.UserInfo{
 				Username: "admin-user",
 				Groups:   []string{"system:masters"},
 			}, ws, testOperatorSA, 1)
@@ -228,7 +230,7 @@ var _ = Describe("AuthorizeCreation", func() {
 		})
 
 		It("should bypass quota for operator SA", func() {
-			err := AuthorizeCreation(ctx, reader, authenticationv1.UserInfo{
+			err := workspace.AuthorizeCreation(ctx, reader, authenticationv1.UserInfo{
 				Username: testOperatorSA,
 			}, ws, testOperatorSA, 1)
 			Expect(err).NotTo(HaveOccurred())
@@ -284,7 +286,7 @@ var _ = Describe("AuthorizeModification", func() {
 
 		DescribeTable("should allow or deny based on caller identity",
 			func(user authenticationv1.UserInfo, shouldSucceed bool) {
-				err := AuthorizeModification(ctx, reader, user, ws, testOperatorSA)
+				err := workspace.AuthorizeModification(ctx, reader, user, ws, testOperatorSA)
 				if shouldSucceed {
 					Expect(err).NotTo(HaveOccurred())
 				} else {
@@ -335,12 +337,12 @@ var _ = Describe("AuthorizeModification", func() {
 		})
 
 		It("should deny a regular user", func() {
-			err := AuthorizeModification(ctx, reader, authenticationv1.UserInfo{Username: "alice"}, ws, testOperatorSA)
+			err := workspace.AuthorizeModification(ctx, reader, authenticationv1.UserInfo{Username: "alice"}, ws, testOperatorSA)
 			Expect(err).To(HaveOccurred())
 		})
 
 		It("should allow a privileged user", func() {
-			err := AuthorizeModification(ctx, reader, authenticationv1.UserInfo{
+			err := workspace.AuthorizeModification(ctx, reader, authenticationv1.UserInfo{
 				Username: "admin",
 				Groups:   []string{"system:masters"},
 			}, ws, testOperatorSA)
@@ -364,7 +366,7 @@ var _ = Describe("AuthorizeModification", func() {
 			reader := newFakeReader(binding)
 			ws := newWorkspace(nil)
 
-			err := AuthorizeModification(context.Background(), reader, authenticationv1.UserInfo{Username: "tricky-user"}, ws, testOperatorSA)
+			err := workspace.AuthorizeModification(context.Background(), reader, authenticationv1.UserInfo{Username: "tricky-user"}, ws, testOperatorSA)
 			Expect(err).To(HaveOccurred())
 		})
 	})
