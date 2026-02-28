@@ -35,17 +35,29 @@ const (
 
 	// Version identifies the current version of the application.
 	Version = "app.kubernetes.io/version"
+
+	// System is the fixed PartOf value shared across all OtterScale operators.
+	System = "otterscale-system"
+
+	// Operator is the ManagedBy value for this operator.
+	Operator = "tenant-operator"
 )
 
 // Standard returns the base set of Kubernetes recommended labels for all
-// operator-managed resources. Domain-specific labels (e.g. module-template)
+// operator-managed resources. Domain-specific labels (e.g. workspace-specific)
 // should be added by the caller after invoking this function.
+//
+// If version is empty, the app.kubernetes.io/version label is omitted, as an
+// empty version label carries no semantic meaning per K8s conventions.
 func Standard(name, component, version string) map[string]string {
-	return map[string]string{
+	m := map[string]string{
 		Name:      name,
 		Component: component,
-		PartOf:    "otterscale-system",
-		ManagedBy: "tenant-operator",
-		Version:   version,
+		PartOf:    System,
+		ManagedBy: Operator,
 	}
+	if version != "" {
+		m[Version] = version
+	}
+	return m
 }
