@@ -17,68 +17,77 @@ limitations under the License.
 package labels_test
 
 import (
-	"testing"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 
 	"github.com/otterscale/tenant-operator/internal/labels"
 )
 
-func TestStandard(t *testing.T) {
-	got := labels.Standard("my-app", "controller", "v1.2.3")
+var _ = Describe("Standard", func() {
+	Describe("return value completeness", func() {
+		It("contains exactly the expected labels when version is non-empty", func() {
+			got := labels.Standard("my-app", "controller", "v1.2.3")
 
-	want := map[string]string{
-		"app.kubernetes.io/name":       "my-app",
-		"app.kubernetes.io/component":  "controller",
-		"app.kubernetes.io/part-of":    "otterscale-system",
-		"app.kubernetes.io/managed-by": "tenant-operator",
-		"app.kubernetes.io/version":    "v1.2.3",
-	}
+			Expect(got).To(Equal(map[string]string{
+				labels.Name:      "my-app",
+				labels.Component: "controller",
+				labels.PartOf:    labels.System,
+				labels.ManagedBy: labels.Operator,
+				labels.Version:   "v1.2.3",
+			}))
+		})
 
-	if len(got) != len(want) {
-		t.Errorf("Standard() returned %d labels, want %d", len(got), len(want))
-	}
+		It("omits the version label when version is empty", func() {
+			got := labels.Standard("my-app", "controller", "")
 
-	for key, wantVal := range want {
-		if gotVal, ok := got[key]; !ok {
-			t.Errorf("Standard() missing label %q", key)
-		} else if gotVal != wantVal {
-			t.Errorf("Standard()[%q] = %q, want %q", key, gotVal, wantVal)
-		}
-	}
-}
+			Expect(got).To(Equal(map[string]string{
+				labels.Name:      "my-app",
+				labels.Component: "controller",
+				labels.PartOf:    labels.System,
+				labels.ManagedBy: labels.Operator,
+			}))
+			Expect(got).NotTo(HaveKey(labels.Version))
+		})
+	})
 
-func TestStandard_AllArgsPassedThrough(t *testing.T) {
-	cases := []struct {
-		name      string
-		component string
-		version   string
-	}{
-		{"workspace", "webhook", "v0.1.0"},
-		{"module", "controller", ""},
-		{"", "", ""},
-	}
+	Describe("variable arguments are passed through", func() {
+		DescribeTable("name, component and version",
+			func(name, component, version string) {
+				got := labels.Standard(name, component, version)
 
-	for _, tc := range cases {
-		got := labels.Standard(tc.name, tc.component, tc.version)
+				Expect(got).To(HaveKeyWithValue(labels.Name, name))
+				Expect(got).To(HaveKeyWithValue(labels.Component, component))
+				if version != "" {
+					Expect(got).To(HaveKeyWithValue(labels.Version, version))
+				} else {
+					Expect(got).NotTo(HaveKey(labels.Version))
+				}
+			},
+			Entry("typical release", "workspace", "webhook", "v0.1.0"),
+			Entry("empty version omits label", "module", "controller", ""),
+			Entry("all empty strings", "", "", ""),
+		)
+	})
 
-		if got[labels.Name] != tc.name {
-			t.Errorf("Standard(%q, ...) Name = %q, want %q", tc.name, got[labels.Name], tc.name)
-		}
-		if got[labels.Component] != tc.component {
-			t.Errorf("Standard(..., %q, ...) Component = %q, want %q", tc.component, got[labels.Component], tc.component)
-		}
-		if got[labels.Version] != tc.version {
-			t.Errorf("Standard(..., %q) Version = %q, want %q", tc.version, got[labels.Version], tc.version)
-		}
-	}
-}
+	Describe("fixed labels are immutable regardless of arguments", func() {
+		DescribeTable("PartOf and ManagedBy are always set to the operator identity",
+			func(name, component, version string) {
+				got := labels.Standard(name, component, version)
 
-func TestStandard_FixedLabels(t *testing.T) {
-	got := labels.Standard("any", "any", "any")
+				Expect(got).To(HaveKeyWithValue(labels.PartOf, labels.System))
+				Expect(got).To(HaveKeyWithValue(labels.ManagedBy, labels.Operator))
+			},
+			Entry("with version", "any", "any", "v1.0.0"),
+			Entry("without version", "any", "any", ""),
+			Entry("all empty", "", "", ""),
+		)
 
-	if got[labels.PartOf] != "otterscale-system" {
-		t.Errorf("Standard() PartOf = %q, want %q", got[labels.PartOf], "otterscale-system")
-	}
-	if got[labels.ManagedBy] != "tenant-operator" {
-		t.Errorf("Standard() ManagedBy = %q, want %q", got[labels.ManagedBy], "tenant-operator")
-	}
-}
+		It("System constant equals otterscale-system", func() {
+			Expect(labels.System).To(Equal("otterscale-system"))
+		})
+
+		It("Operator constant equals tenant-operator", func() {
+			Expect(labels.Operator).To(Equal("tenant-operator"))
+		})
+	})
+})
