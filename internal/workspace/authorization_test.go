@@ -19,7 +19,9 @@ package workspace
 import (
 	"context"
 	"fmt"
-	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -31,7 +33,8 @@ import (
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
 )
 
-// newWorkspace is a test helper that builds a Workspace with the given members.
+const testOperatorSA = "system:serviceaccount:test-system:test-controller-manager"
+
 func newWorkspace(members []tenantv1alpha1.WorkspaceMember) *tenantv1alpha1.Workspace {
 	return newWorkspaceWithName("test-workspace", "test-ns", members)
 }
@@ -53,8 +56,6 @@ func newWorkspaceWithName(name, namespace string, members []tenantv1alpha1.Works
 	}
 }
 
-const testOperatorSA = "system:serviceaccount:test-system:test-controller-manager"
-
 func newFakeReader(objs ...runtime.Object) client.Reader {
 	s := runtime.NewScheme()
 	_ = rbacv1.AddToScheme(s)
@@ -62,363 +63,309 @@ func newFakeReader(objs ...runtime.Object) client.Reader {
 	return fake.NewClientBuilder().WithScheme(s).WithRuntimeObjects(objs...).Build()
 }
 
-func TestOperatorServiceAccountIdentity(t *testing.T) {
-	got := OperatorServiceAccountIdentity("otterscale-system", "tenant-operator-controller-manager")
-	want := "system:serviceaccount:otterscale-system:tenant-operator-controller-manager"
-	if got != want {
-		t.Errorf("OperatorServiceAccountIdentity() = %q, want %q", got, want)
-	}
-}
+// ---------------------------------------------------------------------------
+
+var _ = Describe("OperatorServiceAccountIdentity", func() {
+	It("should compose the canonical service account username", func() {
+		got := OperatorServiceAccountIdentity("otterscale-system", "tenant-operator-controller-manager")
+		Expect(got).To(Equal("system:serviceaccount:otterscale-system:tenant-operator-controller-manager"))
+	})
+})
 
 // ---------------------------------------------------------------------------
 // AuthorizeCreation
 // ---------------------------------------------------------------------------
 
-func TestAuthorizeCreation(t *testing.T) {
-	clusterAdminBinding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: "cluster-admin-binding"},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: rbacv1.GroupName,
-			Kind:     "ClusterRole",
-			Name:     "cluster-admin",
-		},
-		Subjects: []rbacv1.Subject{
-			{Kind: rbacv1.UserKind, Name: "super-admin"},
-		},
-	}
-	reader := newFakeReader(clusterAdminBinding)
-	ctx := context.Background()
-
-	ws := newWorkspace([]tenantv1alpha1.WorkspaceMember{
-		{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
-		{Role: tenantv1alpha1.MemberRoleEdit, Subject: "bob"},
-	})
-
-	tests := []struct {
-		name    string
-		user    authenticationv1.UserInfo
-		wantErr bool
-	}{
-		{
-			name:    "privileged group bypasses all checks",
-			user:    authenticationv1.UserInfo{Username: "any-user", Groups: []string{"system:masters"}},
-			wantErr: false,
-		},
-		{
-			name:    "operator SA bypasses all checks",
-			user:    authenticationv1.UserInfo{Username: testOperatorSA},
-			wantErr: false,
-		},
-		{
-			name:    "creator listed as admin is allowed",
-			user:    authenticationv1.UserInfo{Username: "alice"},
-			wantErr: false,
-		},
-		{
-			name:    "user bound to cluster-admin is allowed even without admin role",
-			user:    authenticationv1.UserInfo{Username: "super-admin"},
-			wantErr: false,
-		},
-		{
-			name:    "creator listed as edit only is denied",
-			user:    authenticationv1.UserInfo{Username: "bob"},
-			wantErr: true,
-		},
-		{
-			name:    "creator not listed at all is denied",
-			user:    authenticationv1.UserInfo{Username: "mallory"},
-			wantErr: true,
-		},
-		{
-			name:    "non-privileged group does not help",
-			user:    authenticationv1.UserInfo{Username: "mallory", Groups: []string{"system:authenticated"}},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := AuthorizeCreation(ctx, reader, tt.user, ws, testOperatorSA, 0)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("AuthorizeCreation() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestAuthorizeCreation_QuotaEnforcement(t *testing.T) {
-	existingWorkspaces := make([]runtime.Object, 3)
-	for i := range existingWorkspaces {
-		existingWorkspaces[i] = newWorkspaceWithName(
-			fmt.Sprintf("ws-%d", i),
-			fmt.Sprintf("ns-%d", i),
-			[]tenantv1alpha1.WorkspaceMember{
-				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
-			},
-		)
-	}
-	reader := newFakeReader(existingWorkspaces...)
-	ctx := context.Background()
-
-	newWS := newWorkspace([]tenantv1alpha1.WorkspaceMember{
-		{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
-	})
-	alice := authenticationv1.UserInfo{Username: "alice"}
-
-	tests := []struct {
-		name       string
-		maxPerUser int
-		wantErr    bool
-	}{
-		{name: "quota disabled (0) allows creation", maxPerUser: 0, wantErr: false},
-		{name: "under quota allows creation", maxPerUser: 5, wantErr: false},
-		{name: "at quota denies creation", maxPerUser: 3, wantErr: true},
-		{name: "over quota denies creation", maxPerUser: 2, wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := AuthorizeCreation(ctx, reader, alice, newWS, testOperatorSA, tt.maxPerUser)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("AuthorizeCreation() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestAuthorizeCreation_QuotaCountsOnlyAdminRole(t *testing.T) {
-	reader := newFakeReader(
-		newWorkspaceWithName("ws-admin", "ns-admin", []tenantv1alpha1.WorkspaceMember{
-			{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
-		}),
-		newWorkspaceWithName("ws-edit", "ns-edit", []tenantv1alpha1.WorkspaceMember{
-			{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "bob"},
-			{Role: tenantv1alpha1.MemberRoleEdit, Subject: "alice"},
-		}),
-		newWorkspaceWithName("ws-view", "ns-view", []tenantv1alpha1.WorkspaceMember{
-			{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "bob"},
-			{Role: tenantv1alpha1.MemberRoleView, Subject: "alice"},
-		}),
+var _ = Describe("AuthorizeCreation", func() {
+	var (
+		ctx    context.Context
+		reader client.Reader
+		ws     *tenantv1alpha1.Workspace
 	)
-	ctx := context.Background()
 
-	newWS := newWorkspace([]tenantv1alpha1.WorkspaceMember{
-		{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
-	})
-	alice := authenticationv1.UserInfo{Username: "alice"}
+	Context("role and identity checks", func() {
+		BeforeEach(func() {
+			ctx = context.Background()
+			clusterAdminBinding := &rbacv1.ClusterRoleBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "cluster-admin-binding"},
+				RoleRef: rbacv1.RoleRef{
+					APIGroup: rbacv1.GroupName,
+					Kind:     "ClusterRole",
+					Name:     "cluster-admin",
+				},
+				Subjects: []rbacv1.Subject{
+					{Kind: rbacv1.UserKind, Name: "super-admin"},
+				},
+			}
+			reader = newFakeReader(clusterAdminBinding)
+			ws = newWorkspace([]tenantv1alpha1.WorkspaceMember{
+				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
+				{Role: tenantv1alpha1.MemberRoleEdit, Subject: "bob"},
+			})
+		})
 
-	// alice is admin in 1 workspace, edit in 1, view in 1 → admin count = 1
-	err := AuthorizeCreation(ctx, reader, alice, newWS, testOperatorSA, 2)
-	if err != nil {
-		t.Errorf("AuthorizeCreation() unexpected error: alice has only 1 admin workspace, quota is 2: %v", err)
-	}
-
-	err = AuthorizeCreation(ctx, reader, alice, newWS, testOperatorSA, 1)
-	if err == nil {
-		t.Error("AuthorizeCreation() expected quota error: alice has 1 admin workspace, quota is 1")
-	}
-}
-
-func TestAuthorizeCreation_PrivilegedCallerBypassesQuota(t *testing.T) {
-	existingWorkspaces := make([]runtime.Object, 5)
-	for i := range existingWorkspaces {
-		existingWorkspaces[i] = newWorkspaceWithName(
-			fmt.Sprintf("ws-%d", i),
-			fmt.Sprintf("ns-%d", i),
-			[]tenantv1alpha1.WorkspaceMember{
-				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "admin-user"},
+		DescribeTable("should allow or deny based on caller identity",
+			func(user authenticationv1.UserInfo, shouldSucceed bool) {
+				err := AuthorizeCreation(ctx, reader, user, ws, testOperatorSA, 0)
+				if shouldSucceed {
+					Expect(err).NotTo(HaveOccurred())
+				} else {
+					Expect(err).To(HaveOccurred())
+				}
 			},
+			Entry("privileged group bypasses all checks",
+				authenticationv1.UserInfo{Username: "any-user", Groups: []string{"system:masters"}}, true),
+			Entry("operator SA bypasses all checks",
+				authenticationv1.UserInfo{Username: testOperatorSA}, true),
+			Entry("creator listed as admin is allowed",
+				authenticationv1.UserInfo{Username: "alice"}, true),
+			Entry("user bound to cluster-admin is allowed even without admin role",
+				authenticationv1.UserInfo{Username: "super-admin"}, true),
+			Entry("creator listed as edit only is denied",
+				authenticationv1.UserInfo{Username: "bob"}, false),
+			Entry("creator not listed at all is denied",
+				authenticationv1.UserInfo{Username: "mallory"}, false),
+			Entry("non-privileged group does not help",
+				authenticationv1.UserInfo{Username: "mallory", Groups: []string{"system:authenticated"}}, false),
 		)
-	}
-	reader := newFakeReader(existingWorkspaces...)
-	ctx := context.Background()
-
-	ws := newWorkspace([]tenantv1alpha1.WorkspaceMember{
-		{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "admin-user"},
 	})
 
-	// Privileged group bypasses quota
-	err := AuthorizeCreation(ctx, reader, authenticationv1.UserInfo{
-		Username: "admin-user",
-		Groups:   []string{"system:masters"},
-	}, ws, testOperatorSA, 1)
-	if err != nil {
-		t.Errorf("AuthorizeCreation() privileged group should bypass quota: %v", err)
-	}
+	Context("quota enforcement", func() {
+		var alice authenticationv1.UserInfo
 
-	// Operator SA bypasses quota
-	err = AuthorizeCreation(ctx, reader, authenticationv1.UserInfo{
-		Username: testOperatorSA,
-	}, ws, testOperatorSA, 1)
-	if err != nil {
-		t.Errorf("AuthorizeCreation() operator SA should bypass quota: %v", err)
-	}
-}
+		BeforeEach(func() {
+			ctx = context.Background()
+			existingWorkspaces := make([]runtime.Object, 3)
+			for i := range existingWorkspaces {
+				existingWorkspaces[i] = newWorkspaceWithName(
+					fmt.Sprintf("ws-%d", i),
+					fmt.Sprintf("ns-%d", i),
+					[]tenantv1alpha1.WorkspaceMember{
+						{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
+					},
+				)
+			}
+			reader = newFakeReader(existingWorkspaces...)
+			ws = newWorkspace([]tenantv1alpha1.WorkspaceMember{
+				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
+			})
+			alice = authenticationv1.UserInfo{Username: "alice"}
+		})
+
+		DescribeTable("should enforce per-user workspace quota",
+			func(maxPerUser int, shouldSucceed bool) {
+				err := AuthorizeCreation(ctx, reader, alice, ws, testOperatorSA, maxPerUser)
+				if shouldSucceed {
+					Expect(err).NotTo(HaveOccurred())
+				} else {
+					Expect(err).To(HaveOccurred())
+				}
+			},
+			Entry("quota disabled (0) allows creation", 0, true),
+			Entry("under quota allows creation", 5, true),
+			Entry("at quota denies creation", 3, false),
+			Entry("over quota denies creation", 2, false),
+		)
+	})
+
+	Context("quota counts only admin role", func() {
+		BeforeEach(func() {
+			ctx = context.Background()
+			reader = newFakeReader(
+				newWorkspaceWithName("ws-admin", "ns-admin", []tenantv1alpha1.WorkspaceMember{
+					{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
+				}),
+				newWorkspaceWithName("ws-edit", "ns-edit", []tenantv1alpha1.WorkspaceMember{
+					{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "bob"},
+					{Role: tenantv1alpha1.MemberRoleEdit, Subject: "alice"},
+				}),
+				newWorkspaceWithName("ws-view", "ns-view", []tenantv1alpha1.WorkspaceMember{
+					{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "bob"},
+					{Role: tenantv1alpha1.MemberRoleView, Subject: "alice"},
+				}),
+			)
+			ws = newWorkspace([]tenantv1alpha1.WorkspaceMember{
+				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
+			})
+		})
+
+		It("should allow when admin count is below quota", func() {
+			err := AuthorizeCreation(ctx, reader, authenticationv1.UserInfo{Username: "alice"}, ws, testOperatorSA, 2)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should deny when admin count meets quota", func() {
+			err := AuthorizeCreation(ctx, reader, authenticationv1.UserInfo{Username: "alice"}, ws, testOperatorSA, 1)
+			Expect(err).To(HaveOccurred())
+		})
+	})
+
+	Context("privileged caller bypasses quota", func() {
+		BeforeEach(func() {
+			ctx = context.Background()
+			existingWorkspaces := make([]runtime.Object, 5)
+			for i := range existingWorkspaces {
+				existingWorkspaces[i] = newWorkspaceWithName(
+					fmt.Sprintf("ws-%d", i),
+					fmt.Sprintf("ns-%d", i),
+					[]tenantv1alpha1.WorkspaceMember{
+						{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "admin-user"},
+					},
+				)
+			}
+			reader = newFakeReader(existingWorkspaces...)
+			ws = newWorkspace([]tenantv1alpha1.WorkspaceMember{
+				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "admin-user"},
+			})
+		})
+
+		It("should bypass quota for privileged group", func() {
+			err := AuthorizeCreation(ctx, reader, authenticationv1.UserInfo{
+				Username: "admin-user",
+				Groups:   []string{"system:masters"},
+			}, ws, testOperatorSA, 1)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should bypass quota for operator SA", func() {
+			err := AuthorizeCreation(ctx, reader, authenticationv1.UserInfo{
+				Username: testOperatorSA,
+			}, ws, testOperatorSA, 1)
+			Expect(err).NotTo(HaveOccurred())
+		})
+	})
+})
 
 // ---------------------------------------------------------------------------
 // AuthorizeModification
 // ---------------------------------------------------------------------------
 
-func TestAuthorizeModification(t *testing.T) {
-	clusterAdminBinding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: "cluster-admin-binding"},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: rbacv1.GroupName,
-			Kind:     "ClusterRole",
-			Name:     "cluster-admin",
-		},
-		Subjects: []rbacv1.Subject{
-			{Kind: rbacv1.UserKind, Name: "super-admin"},
-			{Kind: rbacv1.GroupKind, Name: "ops-team"},
-			{Kind: rbacv1.ServiceAccountKind, Name: "deployer", Namespace: "ci"},
-		},
-	}
-	nonPrivilegedBinding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: "view-binding"},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: rbacv1.GroupName,
-			Kind:     "ClusterRole",
-			Name:     "view",
-		},
-		Subjects: []rbacv1.Subject{
-			{Kind: rbacv1.UserKind, Name: "viewer"},
-		},
-	}
+var _ = Describe("AuthorizeModification", func() {
+	var (
+		ctx    context.Context
+		reader client.Reader
+		ws     *tenantv1alpha1.Workspace
+	)
 
-	reader := newFakeReader(clusterAdminBinding, nonPrivilegedBinding)
-	ctx := context.Background()
+	Context("role and identity checks", func() {
+		BeforeEach(func() {
+			ctx = context.Background()
+			clusterAdminBinding := &rbacv1.ClusterRoleBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "cluster-admin-binding"},
+				RoleRef: rbacv1.RoleRef{
+					APIGroup: rbacv1.GroupName,
+					Kind:     "ClusterRole",
+					Name:     "cluster-admin",
+				},
+				Subjects: []rbacv1.Subject{
+					{Kind: rbacv1.UserKind, Name: "super-admin"},
+					{Kind: rbacv1.GroupKind, Name: "ops-team"},
+					{Kind: rbacv1.ServiceAccountKind, Name: "deployer", Namespace: "ci"},
+				},
+			}
+			nonPrivilegedBinding := &rbacv1.ClusterRoleBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "view-binding"},
+				RoleRef: rbacv1.RoleRef{
+					APIGroup: rbacv1.GroupName,
+					Kind:     "ClusterRole",
+					Name:     "view",
+				},
+				Subjects: []rbacv1.Subject{
+					{Kind: rbacv1.UserKind, Name: "viewer"},
+				},
+			}
+			reader = newFakeReader(clusterAdminBinding, nonPrivilegedBinding)
+			ws = newWorkspace([]tenantv1alpha1.WorkspaceMember{
+				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
+				{Role: tenantv1alpha1.MemberRoleEdit, Subject: "bob"},
+				{Role: tenantv1alpha1.MemberRoleView, Subject: "charlie"},
+			})
+		})
 
-	ws := newWorkspace([]tenantv1alpha1.WorkspaceMember{
-		{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
-		{Role: tenantv1alpha1.MemberRoleEdit, Subject: "bob"},
-		{Role: tenantv1alpha1.MemberRoleView, Subject: "charlie"},
+		DescribeTable("should allow or deny based on caller identity",
+			func(user authenticationv1.UserInfo, shouldSucceed bool) {
+				err := AuthorizeModification(ctx, reader, user, ws, testOperatorSA)
+				if shouldSucceed {
+					Expect(err).NotTo(HaveOccurred())
+				} else {
+					Expect(err).To(HaveOccurred())
+				}
+			},
+			// Privileged groups
+			Entry("system:masters group is allowed",
+				authenticationv1.UserInfo{Username: "any-user", Groups: []string{"system:masters"}}, true),
+			Entry("kubeadm:cluster-admins group is allowed",
+				authenticationv1.UserInfo{Username: "any-user", Groups: []string{"kubeadm:cluster-admins"}}, true),
+			Entry("privileged group among other groups",
+				authenticationv1.UserInfo{Username: "any-user", Groups: []string{"dev-team", "system:masters", "ops"}}, true),
+			// Operator SA
+			Entry("operator service account is allowed",
+				authenticationv1.UserInfo{Username: testOperatorSA}, true),
+			// Workspace admin
+			Entry("workspace admin member is allowed",
+				authenticationv1.UserInfo{Username: "alice"}, true),
+			// Privileged ClusterRole via ClusterRoleBinding
+			Entry("user bound to cluster-admin via User subject",
+				authenticationv1.UserInfo{Username: "super-admin"}, true),
+			Entry("user in group bound to cluster-admin via Group subject",
+				authenticationv1.UserInfo{Username: "someone", Groups: []string{"ops-team"}}, true),
+			Entry("service account bound to cluster-admin via ServiceAccount subject",
+				authenticationv1.UserInfo{Username: "system:serviceaccount:ci:deployer"}, true),
+			// Denied
+			Entry("workspace edit member is denied",
+				authenticationv1.UserInfo{Username: "bob"}, false),
+			Entry("workspace view member is denied",
+				authenticationv1.UserInfo{Username: "charlie"}, false),
+			Entry("user bound to non-privileged role only is denied",
+				authenticationv1.UserInfo{Username: "viewer"}, false),
+			Entry("unknown user is denied",
+				authenticationv1.UserInfo{Username: "mallory"}, false),
+			Entry("empty username with no groups is denied",
+				authenticationv1.UserInfo{}, false),
+			Entry("non-privileged group is denied",
+				authenticationv1.UserInfo{Username: "mallory", Groups: []string{"system:authenticated", "dev-team"}}, false),
+		)
 	})
 
-	tests := []struct {
-		name    string
-		user    authenticationv1.UserInfo
-		wantErr bool
-	}{
-		// Privileged groups
-		{
-			name:    "system:masters group is allowed",
-			user:    authenticationv1.UserInfo{Username: "any-user", Groups: []string{"system:masters"}},
-			wantErr: false,
-		},
-		{
-			name:    "kubeadm:cluster-admins group is allowed",
-			user:    authenticationv1.UserInfo{Username: "any-user", Groups: []string{"kubeadm:cluster-admins"}},
-			wantErr: false,
-		},
-		{
-			name:    "privileged group among other groups",
-			user:    authenticationv1.UserInfo{Username: "any-user", Groups: []string{"dev-team", "system:masters", "ops"}},
-			wantErr: false,
-		},
-		// Operator SA
-		{
-			name:    "operator service account is allowed",
-			user:    authenticationv1.UserInfo{Username: testOperatorSA},
-			wantErr: false,
-		},
-		// Workspace admin
-		{
-			name:    "workspace admin member is allowed",
-			user:    authenticationv1.UserInfo{Username: "alice"},
-			wantErr: false,
-		},
-		// Privileged ClusterRole (cluster-admin) via ClusterRoleBinding
-		{
-			name:    "user bound to cluster-admin via User subject",
-			user:    authenticationv1.UserInfo{Username: "super-admin"},
-			wantErr: false,
-		},
-		{
-			name:    "user in group bound to cluster-admin via Group subject",
-			user:    authenticationv1.UserInfo{Username: "someone", Groups: []string{"ops-team"}},
-			wantErr: false,
-		},
-		{
-			name:    "service account bound to cluster-admin via ServiceAccount subject",
-			user:    authenticationv1.UserInfo{Username: "system:serviceaccount:ci:deployer"},
-			wantErr: false,
-		},
-		// Denied
-		{
-			name:    "workspace edit member is denied",
-			user:    authenticationv1.UserInfo{Username: "bob"},
-			wantErr: true,
-		},
-		{
-			name:    "workspace view member is denied",
-			user:    authenticationv1.UserInfo{Username: "charlie"},
-			wantErr: true,
-		},
-		{
-			name:    "user bound to non-privileged role only is denied",
-			user:    authenticationv1.UserInfo{Username: "viewer"},
-			wantErr: true,
-		},
-		{
-			name:    "unknown user is denied",
-			user:    authenticationv1.UserInfo{Username: "mallory"},
-			wantErr: true,
-		},
-		{
-			name:    "empty username with no groups is denied",
-			user:    authenticationv1.UserInfo{},
-			wantErr: true,
-		},
-		{
-			name:    "non-privileged group is denied",
-			user:    authenticationv1.UserInfo{Username: "mallory", Groups: []string{"system:authenticated", "dev-team"}},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := AuthorizeModification(ctx, reader, tt.user, ws, testOperatorSA)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("AuthorizeModification() error = %v, wantErr %v", err, tt.wantErr)
-			}
+	Context("with empty members", func() {
+		BeforeEach(func() {
+			ctx = context.Background()
+			reader = newFakeReader()
+			ws = newWorkspace(nil)
 		})
-	}
-}
 
-func TestAuthorizeModification_EmptyMembers(t *testing.T) {
-	reader := newFakeReader()
-	ctx := context.Background()
-	ws := newWorkspace(nil)
+		It("should deny a regular user", func() {
+			err := AuthorizeModification(ctx, reader, authenticationv1.UserInfo{Username: "alice"}, ws, testOperatorSA)
+			Expect(err).To(HaveOccurred())
+		})
 
-	err := AuthorizeModification(ctx, reader, authenticationv1.UserInfo{Username: "alice"}, ws, testOperatorSA)
-	if err == nil {
-		t.Error("AuthorizeModification() expected error for user not in empty members list")
-	}
+		It("should allow a privileged user", func() {
+			err := AuthorizeModification(ctx, reader, authenticationv1.UserInfo{
+				Username: "admin",
+				Groups:   []string{"system:masters"},
+			}, ws, testOperatorSA)
+			Expect(err).NotTo(HaveOccurred())
+		})
+	})
 
-	err = AuthorizeModification(ctx, reader, authenticationv1.UserInfo{Username: "admin", Groups: []string{"system:masters"}}, ws, testOperatorSA)
-	if err != nil {
-		t.Errorf("AuthorizeModification() unexpected error for privileged user: %v", err)
-	}
-}
+	Context("RoleRef.Kind validation", func() {
+		It("should ignore bindings whose RoleRef.Kind is not ClusterRole", func() {
+			binding := &rbacv1.ClusterRoleBinding{
+				ObjectMeta: metav1.ObjectMeta{Name: "role-not-clusterrole"},
+				RoleRef: rbacv1.RoleRef{
+					APIGroup: rbacv1.GroupName,
+					Kind:     "Role",
+					Name:     "cluster-admin",
+				},
+				Subjects: []rbacv1.Subject{
+					{Kind: rbacv1.UserKind, Name: "tricky-user"},
+				},
+			}
+			reader := newFakeReader(binding)
+			ws := newWorkspace(nil)
 
-func TestAuthorizeModification_IgnoresNonClusterRoleKind(t *testing.T) {
-	binding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: "role-not-clusterrole"},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: rbacv1.GroupName,
-			Kind:     "Role",
-			Name:     "cluster-admin",
-		},
-		Subjects: []rbacv1.Subject{
-			{Kind: rbacv1.UserKind, Name: "tricky-user"},
-		},
-	}
-	reader := newFakeReader(binding)
-	ws := newWorkspace(nil)
-
-	err := AuthorizeModification(context.Background(), reader, authenticationv1.UserInfo{Username: "tricky-user"}, ws, testOperatorSA)
-	if err == nil {
-		t.Error("AuthorizeModification() should deny when RoleRef.Kind is not ClusterRole")
-	}
-}
+			err := AuthorizeModification(context.Background(), reader, authenticationv1.UserInfo{Username: "tricky-user"}, ws, testOperatorSA)
+			Expect(err).To(HaveOccurred())
+		})
+	})
+})
