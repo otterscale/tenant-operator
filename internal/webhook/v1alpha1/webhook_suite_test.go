@@ -29,6 +29,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -40,6 +42,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -67,6 +70,9 @@ var _ = BeforeSuite(func() {
 
 	var err error
 	err = tenantv1alpha1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
+	err = admissionregistrationv1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme
@@ -108,7 +114,7 @@ var _ = BeforeSuite(func() {
 	})
 	Expect(err).NotTo(HaveOccurred())
 
-	err = SetupWorkspaceWebhookWithManager(mgr, "system:serviceaccount:test-system:test-controller-manager", 0)
+	err = SetupWorkspaceWebhookWithManager(mgr, "system:serviceaccount:test-system:test-controller-manager", 2)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:webhook
@@ -130,6 +136,9 @@ var _ = BeforeSuite(func() {
 
 		return conn.Close()
 	}).Should(Succeed())
+
+	applyManifest(filepath.Join("..", "..", "..", "config", "rbac", "workspace_editor_role.yaml"))
+	applyManifest(filepath.Join("..", "..", "..", "config", "rbac", "workspace_binding.yaml"))
 })
 
 var _ = AfterSuite(func() {
@@ -139,6 +148,31 @@ var _ = AfterSuite(func() {
 		return testEnv.Stop()
 	}, time.Minute, time.Second).Should(Succeed())
 })
+
+func applyManifest(path string) {
+	file, err := os.Open(path)
+	Expect(err).NotTo(HaveOccurred())
+	defer func() {
+		Expect(file.Close()).To(Succeed())
+	}()
+
+	decoder := yaml.NewYAMLOrJSONDecoder(file, 4096)
+	for {
+		obj := &unstructured.Unstructured{}
+		if err := decoder.Decode(&obj.Object); err != nil {
+			if err.Error() == "EOF" {
+				break
+			}
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		if obj.Object == nil {
+			continue
+		}
+
+		Expect(k8sClient.Create(ctx, obj)).To(Succeed())
+	}
+}
 
 // getFirstFoundEnvTestBinaryDir locates the first binary in the specified path.
 // ENVTEST-based tests depend on specific binaries, usually located in paths set by

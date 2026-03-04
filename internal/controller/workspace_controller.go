@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -126,28 +127,30 @@ func (r *WorkspaceReconciler) reconcileResources(ctx context.Context, w *tenantv
 }
 
 // handleReconcileError categorizes errors and updates status accordingly.
-// Permanent errors (e.g. namespace conflict) do NOT requeue to avoid infinite loops.
+// Permanent errors (e.g. namespace conflict) do NOT requeue to avoid infinite loops,
+// unless the status patch itself fails — in which case a delayed requeue ensures the
+// status eventually reflects the error.
 // Transient errors are returned to the controller-runtime for exponential backoff retry.
 func (r *WorkspaceReconciler) handleReconcileError(ctx context.Context, w *tenantv1alpha1.Workspace, err error) (ctrl.Result, error) {
 	var nce *workspace.NamespaceConflictError
 	if errors.As(err, &nce) {
-		// Permanent error: do not requeue, just update status
-		r.setReadyConditionFalse(ctx, w, "NamespaceConflict", err.Error())
+		patchErr := r.setReadyConditionFalse(ctx, w, "NamespaceConflict", err.Error())
 		r.Recorder.Eventf(w, nil, corev1.EventTypeWarning, "NamespaceConflict", "Reconcile", err.Error())
+		if patchErr != nil {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
 		return ctrl.Result{}, nil
 	}
 
 	// Transient error: update status and requeue
-	r.setReadyConditionFalse(ctx, w, "ReconcileError", err.Error())
+	_ = r.setReadyConditionFalse(ctx, w, "ReconcileError", err.Error())
 	r.Recorder.Eventf(w, nil, corev1.EventTypeWarning, "ReconcileError", "Reconcile", err.Error())
 	return ctrl.Result{}, err
 }
 
 // setReadyConditionFalse updates the Ready condition to False via status patch.
-// Errors are logged rather than propagated to avoid masking the original reconcile error.
-func (r *WorkspaceReconciler) setReadyConditionFalse(ctx context.Context, w *tenantv1alpha1.Workspace, reason, message string) {
-	logger := log.FromContext(ctx)
-
+// Returns the patch error so callers can decide whether to retry.
+func (r *WorkspaceReconciler) setReadyConditionFalse(ctx context.Context, w *tenantv1alpha1.Workspace, reason, message string) error {
 	patch := client.MergeFrom(w.DeepCopy())
 	meta.SetStatusCondition(&w.Status.Conditions, metav1.Condition{
 		Type:               workspace.ConditionTypeReady,
@@ -159,8 +162,10 @@ func (r *WorkspaceReconciler) setReadyConditionFalse(ctx context.Context, w *ten
 	w.Status.ObservedGeneration = w.Generation
 
 	if err := r.Status().Patch(ctx, w, patch); err != nil {
-		logger.Error(err, "Failed to patch Ready=False status condition", "reason", reason)
+		log.FromContext(ctx).Error(err, "Failed to patch Ready=False status condition", "reason", reason)
+		return err
 	}
+	return nil
 }
 
 // SetupWithManager registers the controller with the Manager and defines watches.

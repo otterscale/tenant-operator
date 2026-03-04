@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -30,7 +29,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/client-go/rest"
@@ -60,12 +58,6 @@ var _ = Describe("Workspace Controller", func() {
 	)
 
 	// --- Helpers ---
-
-	toRawExtension := func(obj any) *runtime.RawExtension {
-		raw, err := json.Marshal(obj)
-		Expect(err).NotTo(HaveOccurred())
-		return &runtime.RawExtension{Raw: raw}
-	}
 
 	makeWorkspace := func(name, namespace string, mods ...func(*tenantv1alpha1.Workspace)) *tenantv1alpha1.Workspace {
 		w := &tenantv1alpha1.Workspace{
@@ -179,15 +171,15 @@ var _ = Describe("Workspace Controller", func() {
 	Context("Resource Management", func() {
 		BeforeEach(func() {
 			workspace = makeWorkspace(resourceName, namespaceName, func(w *tenantv1alpha1.Workspace) {
-				w.Spec.ResourceQuota = toRawExtension(corev1.ResourceQuotaSpec{
+				w.Spec.ResourceQuota = &corev1.ResourceQuotaSpec{
 					Hard: corev1.ResourceList{corev1.ResourcePods: resource.MustParse("10")},
-				})
-				w.Spec.LimitRange = toRawExtension(corev1.LimitRangeSpec{
+				}
+				w.Spec.LimitRange = &corev1.LimitRangeSpec{
 					Limits: []corev1.LimitRangeItem{{
 						Type:    corev1.LimitTypeContainer,
 						Default: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
 					}},
-				})
+				}
 			})
 		})
 

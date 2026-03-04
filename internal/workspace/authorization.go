@@ -194,6 +194,23 @@ func inPrivilegedGroup(userInfo authenticationv1.UserInfo) bool {
 	return false
 }
 
+// ValidateNamespaceUniqueness ensures no other Workspace already claims the
+// same target namespace. Without this check two Workspaces could reference the
+// same namespace and the second would be permanently stuck at Ready=False.
+func ValidateNamespaceUniqueness(ctx context.Context, reader client.Reader, ws *tenantv1alpha1.Workspace) error {
+	var list tenantv1alpha1.WorkspaceList
+	if err := reader.List(ctx, &list); err != nil {
+		return fmt.Errorf("failed to list workspaces for namespace uniqueness check: %w", err)
+	}
+	for i := range list.Items {
+		existing := &list.Items[i]
+		if existing.Name != ws.Name && existing.Spec.Namespace == ws.Spec.Namespace {
+			return fmt.Errorf("namespace %q is already used by workspace %q", ws.Spec.Namespace, existing.Name)
+		}
+	}
+	return nil
+}
+
 // isWorkspaceAdmin returns true if username matches a member with role "admin".
 func isWorkspaceAdmin(username string, workspace *tenantv1alpha1.Workspace) bool {
 	for _, m := range workspace.Spec.Members {
