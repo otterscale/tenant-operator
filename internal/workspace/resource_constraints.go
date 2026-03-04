@@ -18,8 +18,6 @@ package workspace
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -44,14 +42,9 @@ func ReconcileResourceQuota(ctx context.Context, c client.Client, scheme *runtim
 		return client.IgnoreNotFound(c.Delete(ctx, quota))
 	}
 
-	var quotaSpec corev1.ResourceQuotaSpec
-	if err := json.Unmarshal(w.Spec.ResourceQuota.Raw, &quotaSpec); err != nil {
-		return fmt.Errorf("failed to unmarshal ResourceQuota spec: %w", err)
-	}
-
 	op, err := ctrlutil.CreateOrUpdate(ctx, c, quota, func() error {
 		quota.Labels = LabelsForWorkspace(w.Name, version)
-		quota.Spec = quotaSpec
+		quota.Spec = *w.Spec.ResourceQuota
 		return ctrlutil.SetControllerReference(w, quota, scheme)
 	})
 	if err != nil {
@@ -76,14 +69,9 @@ func ReconcileLimitRange(ctx context.Context, c client.Client, scheme *runtime.S
 		return client.IgnoreNotFound(c.Delete(ctx, limits))
 	}
 
-	var limitsSpec corev1.LimitRangeSpec
-	if err := json.Unmarshal(w.Spec.LimitRange.Raw, &limitsSpec); err != nil {
-		return fmt.Errorf("failed to unmarshal LimitRange spec: %w", err)
-	}
-
 	op, err := ctrlutil.CreateOrUpdate(ctx, c, limits, func() error {
 		limits.Labels = LabelsForWorkspace(w.Name, version)
-		limits.Spec = limitsSpec
+		limits.Spec = *w.Spec.LimitRange
 		return ctrlutil.SetControllerReference(w, limits, scheme)
 	})
 	if err != nil {
