@@ -162,6 +162,38 @@ var _ = Describe("Workspace Controller - CEL Validation", func() {
 			}
 			Expect(caClient.Create(ctx, workspace)).To(Succeed())
 		})
+
+		It("should deny creation when another workspace already uses the same namespace", func() {
+			sharedNS := string(uuid.NewUUID())
+
+			firstWS := &tenantv1alpha1.Workspace{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: tenantv1alpha1.WorkspaceSpec{
+					Namespace: sharedNS,
+					Members: []tenantv1alpha1.WorkspaceMember{
+						{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
+					},
+				},
+			}
+			aliceClient := createImpersonatedClient("alice", nil)
+			Expect(aliceClient.Create(ctx, firstWS)).To(Succeed())
+			workspace = firstWS
+
+			secondName := string(uuid.NewUUID())
+			secondWS := &tenantv1alpha1.Workspace{
+				ObjectMeta: metav1.ObjectMeta{Name: secondName},
+				Spec: tenantv1alpha1.WorkspaceSpec{
+					Namespace: sharedNS,
+					Members: []tenantv1alpha1.WorkspaceMember{
+						{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "bob"},
+					},
+				},
+			}
+			bobClient := createImpersonatedClient("bob", nil)
+			err := bobClient.Create(ctx, secondWS)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("is already used by workspace"))
+		})
 	})
 
 	Context("Admission Policy - Update/Delete Authorization", func() {
@@ -249,6 +281,43 @@ var _ = Describe("Workspace Controller - CEL Validation", func() {
 
 			w.Spec.NetworkIsolation.Enabled = true
 			Expect(caClient.Update(ctx, &w)).To(Succeed())
+		})
+
+		It("should allow workspace admin to delete workspace", func() {
+			adminClient := createImpersonatedClient("admin-user", []string{"system:authenticated"})
+
+			nsName := types.NamespacedName{Name: resourceName}
+			var w tenantv1alpha1.Workspace
+			Expect(k8sClient.Get(ctx, nsName, &w)).To(Succeed())
+
+			Expect(adminClient.Delete(ctx, &w)).To(Succeed())
+
+			// Prevent AfterEach from trying to delete again
+			workspace = nil
+		})
+
+		It("should deny non-admin user from deleting workspace", func() {
+			nonAdminClient := createImpersonatedClient("random-user", []string{"system:authenticated"})
+
+			nsName := types.NamespacedName{Name: resourceName}
+			var w tenantv1alpha1.Workspace
+			Expect(k8sClient.Get(ctx, nsName, &w)).To(Succeed())
+
+			err := nonAdminClient.Delete(ctx, &w)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("only users with the 'admin' role"))
+		})
+
+		It("should allow system:masters to delete workspace", func() {
+			masterClient := createImpersonatedClient("cluster-admin", []string{"system:masters"})
+
+			nsName := types.NamespacedName{Name: resourceName}
+			var w tenantv1alpha1.Workspace
+			Expect(k8sClient.Get(ctx, nsName, &w)).To(Succeed())
+
+			Expect(masterClient.Delete(ctx, &w)).To(Succeed())
+
+			workspace = nil
 		})
 	})
 

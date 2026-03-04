@@ -371,3 +371,71 @@ var _ = Describe("AuthorizeModification", func() {
 		})
 	})
 })
+
+// ---------------------------------------------------------------------------
+// ValidateNamespaceUniqueness
+// ---------------------------------------------------------------------------
+
+var _ = Describe("ValidateNamespaceUniqueness", func() {
+	var (
+		ctx    context.Context
+		reader client.Reader
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+	})
+
+	It("should allow creation when no other workspace uses the namespace", func() {
+		reader = newFakeReader(
+			newWorkspaceWithName("ws-other", "ns-other", []tenantv1alpha1.WorkspaceMember{
+				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
+			}),
+		)
+		ws := newWorkspaceWithName("ws-new", "ns-new", []tenantv1alpha1.WorkspaceMember{
+			{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "bob"},
+		})
+
+		err := workspace.ValidateNamespaceUniqueness(ctx, reader, ws)
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("should deny creation when another workspace already uses the namespace", func() {
+		reader = newFakeReader(
+			newWorkspaceWithName("ws-existing", "shared-ns", []tenantv1alpha1.WorkspaceMember{
+				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
+			}),
+		)
+		ws := newWorkspaceWithName("ws-conflict", "shared-ns", []tenantv1alpha1.WorkspaceMember{
+			{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "bob"},
+		})
+
+		err := workspace.ValidateNamespaceUniqueness(ctx, reader, ws)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(`namespace "shared-ns" is already used by workspace "ws-existing"`))
+	})
+
+	It("should not conflict with itself (same name)", func() {
+		reader = newFakeReader(
+			newWorkspaceWithName("ws-self", "ns-self", []tenantv1alpha1.WorkspaceMember{
+				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
+			}),
+		)
+		ws := newWorkspaceWithName("ws-self", "ns-self", []tenantv1alpha1.WorkspaceMember{
+			{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
+		})
+
+		err := workspace.ValidateNamespaceUniqueness(ctx, reader, ws)
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("should allow creation when no workspaces exist", func() {
+		reader = newFakeReader()
+		ws := newWorkspaceWithName("ws-first", "ns-first", []tenantv1alpha1.WorkspaceMember{
+			{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
+		})
+
+		err := workspace.ValidateNamespaceUniqueness(ctx, reader, ws)
+		Expect(err).NotTo(HaveOccurred())
+	})
+})
