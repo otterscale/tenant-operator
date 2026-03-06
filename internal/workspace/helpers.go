@@ -17,21 +17,17 @@ limitations under the License.
 package workspace
 
 import (
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/otterscale/tenant-operator/internal/labels"
 )
 
 const (
-	RoleBindingName         = "workspace-role-binding"
-	ResourceQuotaName       = "workspace-resource-quota"
-	LimitRangeName          = "workspace-limit-range"
-	NetworkPolicyName       = "workspace-network-policy"
-	PeerAuthenticationName  = "workspace-peer-authentication"
-	AuthorizationPolicyName = "workspace-authorization-policy"
+	RoleBindingName   = "workspace-role-binding"
+	ResourceQuotaName = "workspace-resource-quota"
+	LimitRangeName    = "workspace-limit-range"
+	NetworkPolicyName = "workspace-network-policy"
 
 	UserLabelPrefix = "user.otterscale.io/"
 
@@ -53,13 +49,4 @@ func IsOwned(refs []metav1.OwnerReference, uid types.UID) bool {
 		}
 	}
 	return false
-}
-
-// IgnoreNoMatchNotFound ignores NoMatch errors and NotFound errors.
-// This is useful when deleting Istio resources that may not exist in the cluster.
-func IgnoreNoMatchNotFound(err error) error {
-	if meta.IsNoMatchError(err) {
-		return nil
-	}
-	return client.IgnoreNotFound(err)
 }

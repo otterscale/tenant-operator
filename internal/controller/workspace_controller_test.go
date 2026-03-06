@@ -99,10 +99,9 @@ var _ = Describe("Workspace Controller", func() {
 		resourceName = string(uuid.NewUUID())
 		namespaceName = string(uuid.NewUUID())
 		reconciler = &WorkspaceReconciler{
-			Client:        k8sClient,
-			Scheme:        k8sClient.Scheme(),
-			Recorder:      events.NewFakeRecorder(100),
-			istioDetector: &IstioDetector{}, // defaults to disabled (no Istio in envtest)
+			Client:   k8sClient,
+			Scheme:   k8sClient.Scheme(),
+			Recorder: events.NewFakeRecorder(100),
 		}
 		workspace = makeWorkspace(resourceName, namespaceName)
 	})
@@ -219,7 +218,7 @@ var _ = Describe("Workspace Controller", func() {
 			})
 		})
 
-		It("should manage NetworkPolicy when Istio is disabled", func() {
+		It("should manage NetworkPolicy lifecycle", func() {
 			fullyReconcile()
 
 			By("Verifying NetworkPolicy creation")
