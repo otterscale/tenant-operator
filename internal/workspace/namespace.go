@@ -42,7 +42,7 @@ func (e *NamespaceConflictError) Error() string {
 }
 
 // ReconcileNamespace ensures the Namespace exists and is properly labeled.
-func ReconcileNamespace(ctx context.Context, c client.Client, scheme *runtime.Scheme, w *tenantv1alpha1.Workspace, version string, istioEnabled bool) error {
+func ReconcileNamespace(ctx context.Context, c client.Client, scheme *runtime.Scheme, w *tenantv1alpha1.Workspace, version string) error {
 	namespace := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: w.Spec.Namespace,
@@ -60,15 +60,6 @@ func ReconcileNamespace(ctx context.Context, c client.Client, scheme *runtime.Sc
 		}
 
 		maps.Copy(namespace.Labels, LabelsForWorkspace(w.Name, version))
-
-		// Enable or disable Istio sidecar injection based on detection.
-		// Explicitly removing the label when Istio is absent ensures that
-		// namespaces are cleaned up after Istio is uninstalled from the cluster.
-		if istioEnabled {
-			namespace.Labels["istio-injection"] = "enabled"
-		} else {
-			delete(namespace.Labels, "istio-injection")
-		}
 
 		// Set OwnerReference to ensure garbage collection works
 		return ctrlutil.SetControllerReference(w, namespace, scheme)

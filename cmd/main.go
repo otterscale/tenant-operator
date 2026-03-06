@@ -37,8 +37,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
-	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
 	"github.com/otterscale/tenant-operator/internal/controller"
 	webhookv1alpha1 "github.com/otterscale/tenant-operator/internal/webhook/v1alpha1"
@@ -59,8 +57,6 @@ const (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
-	utilruntime.Must(istiosecurityv1.AddToScheme(scheme))
 
 	utilruntime.Must(tenantv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme

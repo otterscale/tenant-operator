@@ -26,20 +26,15 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	istioapisecurityv1 "istio.io/client-go/pkg/apis/security/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
 
@@ -52,14 +47,12 @@ import (
 // match the desired state defined in the Workspace CR.
 //
 // The controller is intentionally kept thin: it orchestrates the reconciliation flow,
-// while the actual resource synchronization logic resides in internal/core/workspace/.
+// while the actual resource synchronization logic resides in internal/workspace/.
 type WorkspaceReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Version  string
 	Recorder events.EventRecorder
-
-	istioDetector *IstioDetector
 }
 
 // RBAC Permissions required by the controller:
@@ -67,12 +60,10 @@ type WorkspaceReconciler struct {
 // +kubebuilder:rbac:groups=tenant.otterscale.io,resources=workspaces/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups="",resources=namespaces;resourcequotas;limitranges,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=bind,resourceNames=admin;edit;view
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch
-// +kubebuilder:rbac:groups=security.istio.io,resources=authorizationpolicies;peerauthentications,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is the main loop for the controller.
 // It implements the level-triggered reconciliation logic with a thin orchestration pattern:
@@ -109,9 +100,7 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 // reconcileResources orchestrates the domain-level resource sync in order.
 func (r *WorkspaceReconciler) reconcileResources(ctx context.Context, w *tenantv1alpha1.Workspace) error {
-	istioEnabled := r.istioDetector.IsEnabled()
-
-	if err := workspace.ReconcileNamespace(ctx, r.Client, r.Scheme, w, r.Version, istioEnabled); err != nil {
+	if err := workspace.ReconcileNamespace(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
 		return err
 	}
 	if err := workspace.ReconcileRoleBindings(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
@@ -123,7 +112,7 @@ func (r *WorkspaceReconciler) reconcileResources(ctx context.Context, w *tenantv
 	if err := workspace.ReconcileLimitRange(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
 		return err
 	}
-	return workspace.ReconcileNetworkIsolation(ctx, r.Client, r.Scheme, w, r.Version, istioEnabled)
+	return workspace.ReconcileNetworkIsolation(ctx, r.Client, r.Scheme, w, r.Version)
 }
 
 // handleReconcileError categorizes errors and updates status accordingly.
@@ -169,93 +158,18 @@ func (r *WorkspaceReconciler) setReadyConditionFalse(ctx context.Context, w *ten
 }
 
 // SetupWithManager registers the controller with the Manager and defines watches.
-//
-// Istio detection is handled dynamically: the controller watches CustomResourceDefinition
-// objects filtered to the security.istio.io group. When an Istio CRD is created or deleted,
-// the IstioDetector refreshes its state and all Workspaces are re-enqueued so the
-// reconciler can adapt (e.g. switch between NetworkPolicy and Istio AuthorizationPolicy).
-//
-// If Istio CRDs are already present at startup, the controller also registers Owns()
-// watches for PeerAuthentication and AuthorizationPolicy to detect external drift.
 func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	r.istioDetector = NewIstioDetector(mgr.GetConfig())
-
-	b := ctrl.NewControllerManagedBy(mgr).
+	return ctrl.NewControllerManagedBy(mgr).
 		For(&tenantv1alpha1.Workspace{},
-			// Filter out status-only updates: only reconcile on spec changes (generation bump).
-			// Label synchronization is handled by the mutating webhook, so we no longer need
-			// to watch for label changes.
 			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
-		// Watch for changes in owned resources to trigger reconciliation
 		Owns(&corev1.Namespace{}).
 		Owns(&corev1.ResourceQuota{}).
 		Owns(&corev1.LimitRange{}).
 		Owns(&rbacv1.RoleBinding{}).
 		Owns(&networkingv1.NetworkPolicy{}).
-		// Watch CRD changes to detect Istio installation or removal at runtime.
-		// When an Istio CRD event fires, mapCRDToWorkspaces refreshes the detector
-		// and enqueues every Workspace for re-reconciliation.
-		Watches(
-			&apiextensionsv1.CustomResourceDefinition{},
-			handler.EnqueueRequestsFromMapFunc(r.mapCRDToWorkspaces),
-			builder.WithPredicates(istioCRDPredicate()),
-		).
-		Named("workspace")
-
-	// If Istio is already available at startup, also watch owned Istio resources
-	// so that external drift (e.g. manual deletion) is detected immediately.
-	//
-	// Known limitation: if Istio is installed *after* the operator starts,
-	// these Owns() watches will NOT be registered because controller-runtime
-	// does not support adding watches dynamically after the controller starts.
-	// The CRD watcher above will still detect the installation and re-enqueue
-	// all Workspaces to create the Istio resources, but subsequent external
-	// drift on those Istio resources (e.g. someone manually deletes a
-	// PeerAuthentication) will not trigger reconciliation until the operator
-	// is restarted. Restarting the operator resolves this, as Istio CRDs will
-	// then be present at startup and the Owns() watches will be registered.
-	if r.istioDetector.IsEnabled() {
-		b.Owns(&istioapisecurityv1.PeerAuthentication{})
-		b.Owns(&istioapisecurityv1.AuthorizationPolicy{})
-	}
-
-	return b.Complete(r)
-}
-
-// mapCRDToWorkspaces is called when an Istio-related CRD is created or deleted.
-// It refreshes the IstioDetector and enqueues all Workspace objects for re-reconciliation.
-func (r *WorkspaceReconciler) mapCRDToWorkspaces(ctx context.Context, _ client.Object) []reconcile.Request {
-	logger := log.FromContext(ctx).WithName("crd-watch")
-
-	r.istioDetector.Refresh()
-	logger.Info("Istio CRD change detected, re-enqueuing all Workspaces",
-		"istioEnabled", r.istioDetector.IsEnabled())
-
-	var workspaces tenantv1alpha1.WorkspaceList
-	if err := r.List(ctx, &workspaces); err != nil {
-		logger.Error(err, "Failed to list Workspaces for CRD change re-enqueue")
-		return nil
-	}
-
-	requests := make([]reconcile.Request, len(workspaces.Items))
-	for i, w := range workspaces.Items {
-		requests[i] = reconcile.Request{
-			NamespacedName: types.NamespacedName{Name: w.Name},
-		}
-	}
-	return requests
-}
-
-// istioCRDPredicate filters CRD events to only those belonging to the security.istio.io group.
-func istioCRDPredicate() predicate.Predicate {
-	return predicate.NewPredicateFuncs(func(obj client.Object) bool {
-		crd, ok := obj.(*apiextensionsv1.CustomResourceDefinition)
-		if !ok {
-			return false
-		}
-		return crd.Spec.Group == "security.istio.io"
-	})
+		Named("workspace").
+		Complete(r)
 }
 
 // updateStatus calculates the status based on the current observed state and patches the resource.
@@ -274,7 +188,6 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 		rolesInUse[m.Role] = true
 	}
 
-	// Build refs in deterministic order: admin, edit, view
 	orderedRoles := []tenantv1alpha1.MemberRole{
 		tenantv1alpha1.MemberRoleAdmin,
 		tenantv1alpha1.MemberRoleEdit,
@@ -310,30 +223,14 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 		newStatus.LimitRangeRef = nil
 	}
 
-	// Update Network Isolation resources
+	// Update NetworkPolicy reference
 	if w.Spec.NetworkIsolation.Enabled {
-		if r.istioDetector.IsEnabled() {
-			newStatus.NetworkPolicyRef = nil
-			newStatus.PeerAuthenticationRef = &tenantv1alpha1.ResourceReference{
-				Name:      workspace.PeerAuthenticationName,
-				Namespace: w.Spec.Namespace,
-			}
-			newStatus.AuthorizationPolicyRef = &tenantv1alpha1.ResourceReference{
-				Name:      workspace.AuthorizationPolicyName,
-				Namespace: w.Spec.Namespace,
-			}
-		} else {
-			newStatus.NetworkPolicyRef = &tenantv1alpha1.ResourceReference{
-				Name:      workspace.NetworkPolicyName,
-				Namespace: w.Spec.Namespace,
-			}
-			newStatus.PeerAuthenticationRef = nil
-			newStatus.AuthorizationPolicyRef = nil
+		newStatus.NetworkPolicyRef = &tenantv1alpha1.ResourceReference{
+			Name:      workspace.NetworkPolicyName,
+			Namespace: w.Spec.Namespace,
 		}
 	} else {
 		newStatus.NetworkPolicyRef = nil
-		newStatus.PeerAuthenticationRef = nil
-		newStatus.AuthorizationPolicyRef = nil
 	}
 
 	// Set Ready condition
