@@ -18,6 +18,7 @@ package main
 
 import (
 	"cmp"
+	"context"
 	"crypto/tls"
 	"flag"
 	"os"
@@ -26,10 +27,13 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -39,6 +43,7 @@ import (
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
 
 	"github.com/otterscale/tenant-operator/internal/controller"
+	"github.com/otterscale/tenant-operator/internal/harbor"
 	webhookv1alpha1 "github.com/otterscale/tenant-operator/internal/webhook/v1alpha1"
 	"github.com/otterscale/tenant-operator/internal/workspace"
 	// +kubebuilder:scaffold:imports
@@ -193,11 +198,38 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize Harbor integration from admin robot secret (if present).
+	podNamespace := cmp.Or(os.Getenv("POD_NAMESPACE"), operatorNamespace)
+
+	var harborClient harbor.Client
+	var harborURL string
+	adminSecret := &corev1.Secret{}
+	adminSecretKey := client.ObjectKey{
+		Namespace: podNamespace,
+		Name:      "otterscale-harbor-admin-robot",
+	}
+	if err := mgr.GetAPIReader().Get(context.Background(), adminSecretKey, adminSecret); err != nil {
+		if apierrors.IsNotFound(err) {
+			setupLog.Info("Harbor admin secret not found, Harbor integration disabled")
+		} else {
+			setupLog.Error(err, "Failed to read Harbor admin secret")
+			os.Exit(1)
+		}
+	} else {
+		harborURL = string(adminSecret.Data["HARBOR_URL"])
+		harborUsername := string(adminSecret.Data["HARBOR_USERNAME"])
+		harborPassword := string(adminSecret.Data["HARBOR_PASSWORD"])
+		harborClient = harbor.NewClient(harborURL, harborUsername, harborPassword)
+		setupLog.Info("Harbor integration enabled", "url", harborURL)
+	}
+
 	if err := (&controller.WorkspaceReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Version:  version,
-		Recorder: mgr.GetEventRecorder("workspace-controller"),
+		Client:       mgr.GetClient(),
+		Scheme:       mgr.GetScheme(),
+		Version:      version,
+		Recorder:     mgr.GetEventRecorder("workspace-controller"),
+		HarborClient: harborClient,
+		HarborURL:    harborURL,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "Workspace")
 		os.Exit(1)
@@ -208,7 +240,6 @@ func main() {
 		// injected via the Kubernetes Downward API (see config/manager/manager.yaml).
 		// This allows the validating webhook to exempt the operator's own reconciliation
 		// updates regardless of the namespace it is deployed in.
-		podNamespace := cmp.Or(os.Getenv("POD_NAMESPACE"), operatorNamespace)
 		podServiceAccount := cmp.Or(os.Getenv("POD_SERVICE_ACCOUNT"), operatorServiceAccount)
 		operatorSA := workspace.OperatorServiceAccountIdentity(podNamespace, podServiceAccount)
 
