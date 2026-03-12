@@ -24,10 +24,11 @@ import (
 )
 
 const (
-	RoleBindingName   = "workspace-role-binding"
-	ResourceQuotaName = "workspace-resource-quota"
-	LimitRangeName    = "workspace-limit-range"
-	NetworkPolicyName = "workspace-network-policy"
+	RoleBindingName     = "workspace-role-binding"
+	ResourceQuotaName   = "workspace-resource-quota"
+	LimitRangeName      = "workspace-limit-range"
+	NetworkPolicyName   = "workspace-network-policy"
+	ImagePullSecretName = "workspace-image-pull-secret"
 
 	UserLabelPrefix = "user.otterscale.io/"
 
