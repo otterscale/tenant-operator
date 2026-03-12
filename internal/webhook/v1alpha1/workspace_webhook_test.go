@@ -160,11 +160,33 @@ var _ = Describe("Workspace Webhook", func() {
 
 	})
 
-	// NOTE: Type-assertion guard tests have been removed because the webhook
-	// methods now use the generic typed interface (admission.Defaulter[*Workspace]
-	// / admission.Validator[*Workspace]), so the compiler enforces type safety at
-	// build time. Workspace authorization (admin-only update/delete) is exercised
-	// via pure Go unit tests in internal/core/workspace/authorization_test.go.
+	Context("Namespace Auto-Generation", func() {
+		It("should auto-generate a 6-character namespace when empty", func() {
+			obj.Spec.Namespace = ""
+
+			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
+
+			Expect(obj.Spec.Namespace).To(HaveLen(6))
+			Expect(obj.Spec.Namespace).To(MatchRegexp(`^[a-z][a-z0-9]{5}$`))
+		})
+
+		It("should not overwrite namespace when explicitly provided", func() {
+			obj.Spec.Namespace = "my-custom-ns"
+
+			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
+
+			Expect(obj.Spec.Namespace).To(Equal("my-custom-ns"))
+		})
+
+		It("should generate unique names on successive calls", func() {
+			names := make(map[string]struct{}, 10)
+			for range 10 {
+				names[generateNamespaceName()] = struct{}{}
+			}
+			// With 6 random chars, 10 calls should produce at least 2 distinct values
+			Expect(len(names)).To(BeNumerically(">=", 2))
+		})
+	})
 
 })
 
