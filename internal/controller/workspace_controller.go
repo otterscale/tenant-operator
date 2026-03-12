@@ -39,6 +39,7 @@ import (
 	"k8s.io/client-go/tools/events"
 
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
+	"github.com/otterscale/tenant-operator/internal/harbor"
 	"github.com/otterscale/tenant-operator/internal/workspace"
 )
 
@@ -50,9 +51,11 @@ import (
 // while the actual resource synchronization logic resides in internal/workspace/.
 type WorkspaceReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Version  string
-	Recorder events.EventRecorder
+	Scheme       *runtime.Scheme
+	Version      string
+	Recorder     events.EventRecorder
+	HarborClient harbor.Client // nil disables Harbor integration
+	HarborURL    string
 }
 
 // RBAC Permissions required by the controller:
@@ -64,6 +67,8 @@ type WorkspaceReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=bind,resourceNames=admin;edit;view
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;update;patch
 
 // Reconcile is the main loop for the controller.
 // It implements the level-triggered reconciliation logic with a thin orchestration pattern:
@@ -102,6 +107,11 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 func (r *WorkspaceReconciler) reconcileResources(ctx context.Context, w *tenantv1alpha1.Workspace) error {
 	if err := workspace.ReconcileNamespace(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
 		return err
+	}
+	if r.HarborClient != nil {
+		if err := workspace.ReconcileHarbor(ctx, r.Client, r.Scheme, w, r.Version, r.HarborClient, r.HarborURL); err != nil {
+			return err
+		}
 	}
 	if err := workspace.ReconcileRoleBindings(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
 		return err
@@ -166,6 +176,7 @@ func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Namespace{}).
 		Owns(&corev1.ResourceQuota{}).
 		Owns(&corev1.LimitRange{}).
+		Owns(&corev1.Secret{}).
 		Owns(&rbacv1.RoleBinding{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Named("workspace").
@@ -221,6 +232,16 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 		}
 	} else {
 		newStatus.LimitRangeRef = nil
+	}
+
+	// Update ImagePullSecret reference
+	if r.HarborClient != nil {
+		newStatus.ImagePullSecretRef = &tenantv1alpha1.ResourceReference{
+			Name:      workspace.ImagePullSecretName,
+			Namespace: w.Spec.Namespace,
+		}
+	} else {
+		newStatus.ImagePullSecretRef = nil
 	}
 
 	// Update NetworkPolicy reference
