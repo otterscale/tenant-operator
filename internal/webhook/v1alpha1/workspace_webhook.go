@@ -18,10 +18,11 @@ package v1alpha1
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"strings"
 
-	"k8s.io/apimachinery/pkg/util/rand"
+	utilrand "k8s.io/apimachinery/pkg/util/rand"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -76,7 +77,12 @@ func (d *WorkspaceCustomDefaulter) Default(ctx context.Context, ws *tenantv1alph
 // generateNamespaceName produces a 6-character namespace name:
 // 1 random lowercase letter [a-z] + 5 characters from the Kubernetes generateName charset.
 func generateNamespaceName() string {
-	return rand.String(6)
+	var b [1]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("crypto/rand is unavailable: " + err.Error())
+	}
+	prefix := string(rune('a' + b[0]%26))
+	return prefix + utilrand.String(5)
 }
 
 // defaultMemberLabels synchronizes member subjects as labels on the Workspace.
