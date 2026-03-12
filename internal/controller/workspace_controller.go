@@ -85,6 +85,13 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Normalize Workspace metadata before reconciling child resources.
+	// Member labels are normally maintained by the mutating webhook on create/update,
+	// but Workspaces created before webhooks were enabled will not be mutated retroactively.
+	if err := r.backfillMemberLabels(ctx, &w); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// 2. Reconcile all domain resources
 	if err := r.reconcileResources(ctx, &w); err != nil {
 		return r.handleReconcileError(ctx, &w, err)
@@ -96,6 +103,24 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *WorkspaceReconciler) backfillMemberLabels(ctx context.Context, w *tenantv1alpha1.Workspace) error {
+	if w == nil {
+		return nil
+	}
+
+	base := w.DeepCopy()
+	if changed := workspace.SyncMemberLabels(w); !changed {
+		return nil
+	}
+
+	patch := client.MergeFrom(base)
+	if err := r.Patch(ctx, w, patch); err != nil {
+		return err
+	}
+	log.FromContext(ctx).Info("Workspace member labels backfilled")
+	return nil
 }
 
 // reconcileResources orchestrates the domain-level resource sync in order.
