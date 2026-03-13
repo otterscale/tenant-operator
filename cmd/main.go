@@ -206,7 +206,7 @@ func main() {
 	adminSecret := &corev1.Secret{}
 	adminSecretKey := client.ObjectKey{
 		Namespace: podNamespace,
-		Name:      "otterscale-harbor-admin-robot",
+		Name:      "otterscale-harbor-robot",
 	}
 	if err := mgr.GetAPIReader().Get(context.Background(), adminSecretKey, adminSecret); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -217,9 +217,9 @@ func main() {
 		}
 	} else {
 		harborURL = string(adminSecret.Data["HARBOR_URL"])
-		harborUsername := string(adminSecret.Data["HARBOR_USERNAME"])
-		harborPassword := string(adminSecret.Data["HARBOR_PASSWORD"])
-		harborClient = harbor.NewClient(harborURL, harborUsername, harborPassword)
+		harborRobotName := string(adminSecret.Data["HARBOR_ROBOT_NAME"])
+		harborRobotSecret := string(adminSecret.Data["HARBOR_ROBOT_SECRET"])
+		harborClient = harbor.NewClient(harborURL, harborRobotName, harborRobotSecret)
 		setupLog.Info("Harbor integration enabled", "url", harborURL)
 	}
 
