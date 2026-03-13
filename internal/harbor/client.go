@@ -27,15 +27,33 @@ import (
 	"time"
 )
 
+// Harbor project role IDs.
+const (
+	RoleProjectAdmin int = 1
+	RoleDeveloper    int = 2
+	RoleGuest        int = 3
+)
+
 // Client defines the operations needed for workspace Harbor integration.
 type Client interface {
 	// EnsureProject ensures a Harbor project with the given name exists.
 	EnsureProject(ctx context.Context, projectName string) error
 
+	// ReconcileProjectMembers synchronizes the Harbor project membership to match
+	// the desired list of members. It adds missing members, updates roles that
+	// have changed, and removes members that are no longer desired.
+	ReconcileProjectMembers(ctx context.Context, projectName string, desired []ProjectMember) error
+
 	// EnsureRobotAccount ensures a robot account exists for the given project.
 	// Returns the credentials and whether the robot was newly created.
 	// If the robot already exists, created is false and credentials are nil.
 	EnsureRobotAccount(ctx context.Context, projectName string, robotName string) (creds *RobotCredentials, created bool, err error)
+}
+
+// ProjectMember represents a desired Harbor project member.
+type ProjectMember struct {
+	Username string
+	RoleID   int
 }
 
 // RobotCredentials holds the credentials returned by Harbor for a robot account.
@@ -88,14 +106,135 @@ func (c *httpClient) EnsureProject(ctx context.Context, projectName string) erro
 	defer func() { _ = resp.Body.Close() }()
 
 	switch resp.StatusCode {
-	case http.StatusCreated:
-		return nil
-	case http.StatusConflict:
-		// Project was created between our check and create — idempotent success
+	case http.StatusCreated, http.StatusConflict:
 		return nil
 	default:
 		return c.unexpectedStatus("creating Harbor project", resp)
 	}
+}
+
+// existingMember represents a member returned by the Harbor API.
+type existingMember struct {
+	ID       int    `json:"id"`
+	RoleID   int    `json:"role_id"`
+	Username string `json:"entity_name"`
+}
+
+// ReconcileProjectMembers synchronizes the Harbor project membership to match
+// the desired list. It lists current members, then adds/updates/removes as needed.
+func (c *httpClient) ReconcileProjectMembers(ctx context.Context, projectName string, desired []ProjectMember) error {
+	basePath := fmt.Sprintf("/api/v2.0/projects/%s/members", projectName)
+
+	// List current members
+	resp, err := c.do(ctx, http.MethodGet, basePath, nil)
+	if err != nil {
+		return fmt.Errorf("listing project members: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return c.unexpectedStatus("listing project members", resp)
+	}
+
+	var existing []existingMember
+	if err := json.NewDecoder(resp.Body).Decode(&existing); err != nil {
+		return fmt.Errorf("decoding project members: %w", err)
+	}
+
+	// Build lookup of existing members by username
+	existingByName := make(map[string]existingMember, len(existing))
+	for _, m := range existing {
+		existingByName[m.Username] = m
+	}
+
+	// Build lookup of desired members by username
+	desiredByName := make(map[string]ProjectMember, len(desired))
+	for _, m := range desired {
+		desiredByName[m.Username] = m
+	}
+
+	// Add or update members
+	for _, d := range desired {
+		if cur, ok := existingByName[d.Username]; ok {
+			// Exists — update role if changed
+			if cur.RoleID != d.RoleID {
+				if err := c.updateProjectMember(ctx, basePath, cur.ID, d.RoleID); err != nil {
+					return fmt.Errorf("updating member %s: %w", d.Username, err)
+				}
+			}
+		} else {
+			// New member — add
+			if err := c.addProjectMember(ctx, basePath, d.Username, d.RoleID); err != nil {
+				return fmt.Errorf("adding member %s: %w", d.Username, err)
+			}
+		}
+	}
+
+	// Remove members no longer in desired list
+	for _, cur := range existing {
+		if _, ok := desiredByName[cur.Username]; !ok {
+			if err := c.deleteProjectMember(ctx, basePath, cur.ID); err != nil {
+				return fmt.Errorf("removing member %s: %w", cur.Username, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// addProjectMember adds a user to the Harbor project with the given role.
+func (c *httpClient) addProjectMember(ctx context.Context, basePath, username string, roleID int) error {
+	body := map[string]any{
+		"role_id": roleID,
+		"member_user": map[string]string{
+			"username": username,
+		},
+	}
+	resp, err := c.doJSON(ctx, http.MethodPost, basePath, body)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	switch resp.StatusCode {
+	case http.StatusCreated, http.StatusConflict:
+		return nil
+	default:
+		return c.unexpectedStatus("adding project member", resp)
+	}
+}
+
+// updateProjectMember updates the role of an existing project member.
+func (c *httpClient) updateProjectMember(ctx context.Context, basePath string, memberID, roleID int) error {
+	path := fmt.Sprintf("%s/%d", basePath, memberID)
+	body := map[string]any{
+		"role_id": roleID,
+	}
+	resp, err := c.doJSON(ctx, http.MethodPut, path, body)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return c.unexpectedStatus("updating project member role", resp)
+	}
+	return nil
+}
+
+// deleteProjectMember removes a member from the Harbor project.
+func (c *httpClient) deleteProjectMember(ctx context.Context, basePath string, memberID int) error {
+	path := fmt.Sprintf("%s/%d", basePath, memberID)
+	resp, err := c.do(ctx, http.MethodDelete, path, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return c.unexpectedStatus("removing project member", resp)
+	}
+	return nil
 }
 
 // EnsureRobotAccount ensures a robot account exists for the given project.
@@ -132,7 +271,13 @@ func (c *httpClient) EnsureRobotAccount(ctx context.Context, projectName string,
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusCreated {
+	switch resp.StatusCode {
+	case http.StatusCreated:
+		// fall through to decode credentials
+	case http.StatusConflict:
+		// Robot was created between our check and create — idempotent success
+		return nil, false, nil
+	default:
 		return nil, false, c.unexpectedStatus("creating Harbor robot account", resp)
 	}
 
@@ -170,7 +315,7 @@ func (c *httpClient) projectExists(ctx context.Context, projectName string) (boo
 
 // robotExists checks whether a Harbor robot account with the given name prefix exists.
 func (c *httpClient) robotExists(ctx context.Context, robotName string) (bool, error) {
-	resp, err := c.do(ctx, http.MethodGet, "/api/v2.0/robots?q=name%3D~"+robotName, nil)
+	resp, err := c.do(ctx, http.MethodGet, "/api/v2.0/robots?q=name=~"+robotName, nil)
 	if err != nil {
 		return false, err
 	}
