@@ -54,7 +54,23 @@ func ReconcileHarbor(
 		return fmt.Errorf("ensuring Harbor project: %w", err)
 	}
 
-	// 2. Ensure robot account exists
+	// 2. Reconcile project members from workspace spec
+	harborMembers := make([]harbor.ProjectMember, 0, len(w.Spec.Members))
+	for _, m := range w.Spec.Members {
+		username := m.Subject
+		if m.Username != nil {
+			username = *m.Username
+		}
+		harborMembers = append(harborMembers, harbor.ProjectMember{
+			Username: username,
+			RoleID:   harborRoleID(m.Role),
+		})
+	}
+	if err := harborClient.ReconcileProjectMembers(ctx, projectName, harborMembers); err != nil {
+		return fmt.Errorf("reconciling Harbor project members: %w", err)
+	}
+
+	// 3. Ensure robot account exists
 	creds, created, err := harborClient.EnsureRobotAccount(ctx, projectName, robotName)
 	if err != nil {
 		return fmt.Errorf("ensuring Harbor robot account: %w", err)
@@ -134,6 +150,20 @@ func ensureImagePullSecret(ctx context.Context, c client.Client, namespace strin
 
 	log.FromContext(ctx).Info("Default ServiceAccount patched with imagePullSecrets", "namespace", namespace)
 	return nil
+}
+
+// harborRoleID maps a workspace member role to a Harbor project role ID.
+func harborRoleID(role tenantv1alpha1.MemberRole) int {
+	switch role {
+	case tenantv1alpha1.MemberRoleAdmin:
+		return harbor.RoleProjectAdmin
+	case tenantv1alpha1.MemberRoleEdit:
+		return harbor.RoleDeveloper
+	case tenantv1alpha1.MemberRoleView:
+		return harbor.RoleGuest
+	default:
+		return harbor.RoleGuest
+	}
 }
 
 // buildDockerConfigJSON constructs the .dockerconfigjson content for a docker-registry secret.
