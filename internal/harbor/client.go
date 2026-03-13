@@ -141,19 +141,14 @@ func (c *httpClient) ReconcileProjectMembers(ctx context.Context, projectName st
 		return fmt.Errorf("decoding project members: %w", err)
 	}
 
-	// Build lookup of existing members by username
+	// Build lookup of existing members by username. We will remove members from this
+	// map as we find them in the desired list. The remaining members will be deleted.
 	existingByName := make(map[string]existingMember, len(existing))
 	for _, m := range existing {
 		existingByName[m.Username] = m
 	}
 
-	// Build lookup of desired members by username
-	desiredByName := make(map[string]ProjectMember, len(desired))
-	for _, m := range desired {
-		desiredByName[m.Username] = m
-	}
-
-	// Add or update members
+	// Add or update members, and track which existing members are still desired.
 	for _, d := range desired {
 		if cur, ok := existingByName[d.Username]; ok {
 			// Exists — update role if changed
@@ -162,6 +157,8 @@ func (c *httpClient) ReconcileProjectMembers(ctx context.Context, projectName st
 					return fmt.Errorf("updating member %s: %w", d.Username, err)
 				}
 			}
+			// Member is desired, so remove from the map of members to be deleted.
+			delete(existingByName, d.Username)
 		} else {
 			// New member — add
 			if err := c.addProjectMember(ctx, basePath, d.Username, d.RoleID); err != nil {
@@ -170,12 +167,10 @@ func (c *httpClient) ReconcileProjectMembers(ctx context.Context, projectName st
 		}
 	}
 
-	// Remove members no longer in desired list
-	for _, cur := range existing {
-		if _, ok := desiredByName[cur.Username]; !ok {
-			if err := c.deleteProjectMember(ctx, basePath, cur.ID); err != nil {
-				return fmt.Errorf("removing member %s: %w", cur.Username, err)
-			}
+	// Remove members no longer in desired list (the ones left in the map).
+	for _, cur := range existingByName {
+		if err := c.deleteProjectMember(ctx, basePath, cur.ID); err != nil {
+			return fmt.Errorf("removing member %s: %w", cur.Username, err)
 		}
 	}
 
