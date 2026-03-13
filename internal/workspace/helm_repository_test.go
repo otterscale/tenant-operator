@@ -58,10 +58,10 @@ func TestBuildHelmRepositoryURL(t *testing.T) {
 			wantInsecure: true,
 		},
 		{
-			name:    "invalid URL",
-			harborURL: "://invalid",
+			name:        "invalid URL",
+			harborURL:   "://invalid",
 			projectName: "ns",
-			wantErr: true,
+			wantErr:     true,
 		},
 	}
 
