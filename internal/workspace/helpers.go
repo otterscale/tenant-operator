@@ -29,6 +29,10 @@ const (
 	LimitRangeName      = "workspace-limit-range"
 	NetworkPolicyName   = "workspace-network-policy"
 	ImagePullSecretName = "workspace-image-pull-secret"
+	HelmRepositoryName  = "workspace-helm-repository"
+
+	LabelFromHarbor = "tenant.otterscale.io/from-harbor"
+	LabelInternal   = "tenant.otterscale.io/internal"
 
 	UserLabelPrefix = "user.otterscale.io/"
 

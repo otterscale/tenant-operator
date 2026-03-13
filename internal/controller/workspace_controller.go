@@ -32,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -69,6 +70,7 @@ type WorkspaceReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=source.toolkit.fluxcd.io,resources=helmrepositories,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is the main loop for the controller.
 // It implements the level-triggered reconciliation logic with a thin orchestration pattern:
@@ -110,6 +112,9 @@ func (r *WorkspaceReconciler) reconcileResources(ctx context.Context, w *tenantv
 	}
 	if r.HarborClient != nil {
 		if err := workspace.ReconcileHarbor(ctx, r.Client, r.Scheme, w, r.Version, r.HarborClient, r.HarborURL); err != nil {
+			return err
+		}
+		if err := workspace.ReconcileHelmRepository(ctx, r.Client, r.Scheme, w, r.Version, r.HarborURL); err != nil {
 			return err
 		}
 	}
@@ -179,6 +184,7 @@ func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Secret{}).
 		Owns(&rbacv1.RoleBinding{}).
 		Owns(&networkingv1.NetworkPolicy{}).
+		Owns(&sourcev1.HelmRepository{}).
 		Named("workspace").
 		Complete(r)
 }
@@ -242,6 +248,16 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 		}
 	} else {
 		newStatus.ImagePullSecretRef = nil
+	}
+
+	// Update HelmRepository reference
+	if r.HarborClient != nil {
+		newStatus.HelmRepositoryRef = &tenantv1alpha1.ResourceReference{
+			Name:      workspace.HelmRepositoryName,
+			Namespace: w.Spec.Namespace,
+		}
+	} else {
+		newStatus.HelmRepositoryRef = nil
 	}
 
 	// Update NetworkPolicy reference

@@ -40,6 +40,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
 
 	"github.com/otterscale/tenant-operator/internal/controller"
@@ -63,6 +64,7 @@ const (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
+	utilruntime.Must(sourcev1.AddToScheme(scheme))
 	utilruntime.Must(tenantv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
