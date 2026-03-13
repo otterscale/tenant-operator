@@ -27,7 +27,10 @@ import (
 const (
 	projectsPath = "/api/v2.0/projects"
 	robotsPath   = "/api/v2.0/robots"
+	membersPath  = "/api/v2.0/projects/test-project/members"
 )
+
+// --- EnsureProject tests ---
 
 func TestEnsureProject_AlreadyExists(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -81,7 +84,7 @@ func TestEnsureProject_ConflictIsIdempotent(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		if r.Method == http.MethodPost {
+		if r.Method == http.MethodPost && r.URL.Path == projectsPath {
 			w.WriteHeader(http.StatusConflict)
 			return
 		}
@@ -111,6 +114,157 @@ func TestEnsureProject_ServerError(t *testing.T) {
 		t.Fatal("EnsureProject should return error on 500")
 	}
 }
+
+// --- ReconcileProjectMembers tests ---
+
+func TestReconcileProjectMembers_AddsNewMembers(t *testing.T) {
+	var addedMembers []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == membersPath {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("[]"))
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == membersPath {
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("failed to decode body: %v", err)
+			}
+			addedMembers = append(addedMembers, body)
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "admin", "password")
+	err := c.ReconcileProjectMembers(context.Background(), "test-project", []ProjectMember{
+		{Username: "alice", RoleID: RoleProjectAdmin},
+		{Username: "bob", RoleID: RoleDeveloper},
+	})
+	if err != nil {
+		t.Fatalf("ReconcileProjectMembers returned error: %v", err)
+	}
+	if len(addedMembers) != 2 {
+		t.Fatalf("expected 2 members added, got %d", len(addedMembers))
+	}
+}
+
+func TestReconcileProjectMembers_UpdatesRole(t *testing.T) {
+	updatedRoleID := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == membersPath {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]existingMember{
+				{ID: 10, RoleID: RoleGuest, Username: "alice"},
+			})
+			return
+		}
+		if r.Method == http.MethodPut && r.URL.Path == membersPath+"/10" {
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("failed to decode body: %v", err)
+			}
+			updatedRoleID = int(body["role_id"].(float64))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "admin", "password")
+	err := c.ReconcileProjectMembers(context.Background(), "test-project", []ProjectMember{
+		{Username: "alice", RoleID: RoleProjectAdmin},
+	})
+	if err != nil {
+		t.Fatalf("ReconcileProjectMembers returned error: %v", err)
+	}
+	if updatedRoleID != RoleProjectAdmin {
+		t.Errorf("expected role updated to %d, got %d", RoleProjectAdmin, updatedRoleID)
+	}
+}
+
+func TestReconcileProjectMembers_RemovesStaleMember(t *testing.T) {
+	deleted := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == membersPath {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]existingMember{
+				{ID: 10, RoleID: RoleProjectAdmin, Username: "alice"},
+				{ID: 20, RoleID: RoleDeveloper, Username: "removed-user"},
+			})
+			return
+		}
+		if r.Method == http.MethodDelete && r.URL.Path == membersPath+"/20" {
+			deleted = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "admin", "password")
+	err := c.ReconcileProjectMembers(context.Background(), "test-project", []ProjectMember{
+		{Username: "alice", RoleID: RoleProjectAdmin},
+	})
+	if err != nil {
+		t.Fatalf("ReconcileProjectMembers returned error: %v", err)
+	}
+	if !deleted {
+		t.Error("expected stale member to be deleted")
+	}
+}
+
+func TestReconcileProjectMembers_NoChanges(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == membersPath {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]existingMember{
+				{ID: 10, RoleID: RoleProjectAdmin, Username: "alice"},
+			})
+			return
+		}
+		t.Errorf("unexpected request: %s %s (no mutations expected)", r.Method, r.URL)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "admin", "password")
+	err := c.ReconcileProjectMembers(context.Background(), "test-project", []ProjectMember{
+		{Username: "alice", RoleID: RoleProjectAdmin},
+	})
+	if err != nil {
+		t.Fatalf("ReconcileProjectMembers returned error: %v", err)
+	}
+}
+
+func TestReconcileProjectMembers_AddConflictIsIdempotent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == membersPath {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("[]"))
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == membersPath {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "admin", "password")
+	err := c.ReconcileProjectMembers(context.Background(), "test-project", []ProjectMember{
+		{Username: "alice", RoleID: RoleProjectAdmin},
+	})
+	if err != nil {
+		t.Fatalf("ReconcileProjectMembers should treat 409 as success, got: %v", err)
+	}
+}
+
+// --- EnsureRobotAccount tests ---
 
 func TestEnsureRobotAccount_Created(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -181,6 +335,35 @@ func TestEnsureRobotAccount_AlreadyExists(t *testing.T) {
 	}
 }
 
+func TestEnsureRobotAccount_ConflictIsIdempotent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == robotsPath {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("[]"))
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == robotsPath {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"errors":[{"code":"CONFLICT","message":"robot account already exists"}]}`))
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "admin", "password")
+	creds, created, err := c.EnsureRobotAccount(context.Background(), "test-ns", "workspace-test-ns")
+	if err != nil {
+		t.Fatalf("EnsureRobotAccount should treat 409 as success, got error: %v", err)
+	}
+	if created {
+		t.Error("expected created=false for conflict")
+	}
+	if creds != nil {
+		t.Error("expected nil credentials for conflict")
+	}
+}
+
 func TestEnsureRobotAccount_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
@@ -199,6 +382,8 @@ func TestEnsureRobotAccount_ServerError(t *testing.T) {
 		t.Fatal("EnsureRobotAccount should return error on 500")
 	}
 }
+
+// --- Misc tests ---
 
 func TestBasicAuthIsSent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
