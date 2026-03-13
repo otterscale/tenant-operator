@@ -25,6 +25,12 @@ github.com/evanphx/json-patch/v5 v5.9.11 h1:/8HVnzMq13/3x9TPvjG08wUGqBTmZBsCWzjT
 github.com/evanphx/json-patch/v5 v5.9.11/go.mod h1:3j+LviiESTElxA4p3EMKAB9HXj3/XEtnUf6OZxqIQTM=
 github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2Wg=
 github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
+github.com/fluxcd/pkg/apis/acl v0.9.0 h1:wBpgsKT+jcyZEcM//OmZr9RiF8klL3ebrDp2u2ThsnA=
+github.com/fluxcd/pkg/apis/acl v0.9.0/go.mod h1:TttNS+gocsGLwnvmgVi3/Yscwqrjc17+vhgYfqkfrV4=
+github.com/fluxcd/pkg/apis/meta v1.25.1 h1:WG1GIC/SOz0GjxT0uVuO6AMicQ3yFsk6bDozCnq+fto=
+github.com/fluxcd/pkg/apis/meta v1.25.1/go.mod h1:c7o6mJGLCMvNrfdinGZehkrdZuFT9vZdZNrn66DtVD0=
+github.com/fluxcd/source-controller/api v1.8.1 h1:49HiJF5mNEdZTwueQMRahTVts35B+xhN5CsuOAL9gQ0=
+github.com/fluxcd/source-controller/api v1.8.1/go.mod h1:HgZ6NSH1cyOE2jRoNwln1xEwr9ETvrLeiy1o4O04vQM=
 github.com/fsnotify/fsnotify v1.9.0 h1:2Ml+OJNzbYCTzsxtv8vKSFD9PbJjmhYF14k/jKC7S9k=
 github.com/fsnotify/fsnotify v1.9.0/go.mod h1:8jBTzvmWwFyi3Pb8djgCCO5IBqzKJ/Jwo8TRcHyHii0=
 github.com/fxamacker/cbor/v2 v2.9.0 h1:NpKPmjDBgUfBms6tr6JZkTHtfFGcMKsw3eGcmD/sapM=
@@ -110,8 +116,8 @@ github.com/onsi/ginkgo/v2 v2.28.1 h1:S4hj+HbZp40fNKuLUQOYLDgZLwNUVn19N3Atb98NCyI
 github.com/onsi/ginkgo/v2 v2.28.1/go.mod h1:CLtbVInNckU3/+gC8LzkGUb9oF+e8W8TdUsxPwvdOgE=
 github.com/onsi/gomega v1.39.1 h1:1IJLAad4zjPn2PsnhH70V4DKRFlrCzGBNrNaru+Vf28=
 github.com/onsi/gomega v1.39.1/go.mod h1:hL6yVALoTOxeWudERyfppUcZXjMwIMLnuSfruD2lcfg=
-github.com/otterscale/api v0.9.0-alpha.5 h1:OHYbwMIaZntrC7xwXu1c4Mr9IJJzJrggbr65fXUo+bE=
-github.com/otterscale/api v0.9.0-alpha.5/go.mod h1:EADd26b/FpPfG+FMkNJU9KnAt19XQrHL4sbpGSWZIBM=
+github.com/otterscale/api v0.9.0-beta.1 h1:QnjRxWEkP0GeoE1yHXK+LfYLyGo4NC+iHlnJ1a0Pdkw=
+github.com/otterscale/api v0.9.0-beta.1/go.mod h1:EADd26b/FpPfG+FMkNJU9KnAt19XQrHL4sbpGSWZIBM=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
