@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -235,7 +236,7 @@ func (c *httpClient) deleteProjectMember(ctx context.Context, basePath string, m
 // EnsureRobotAccount ensures a robot account exists for the given project.
 func (c *httpClient) EnsureRobotAccount(ctx context.Context, projectName string, robotName string) (*RobotCredentials, bool, error) {
 	// Check if robot already exists
-	exists, err := c.robotExists(ctx, robotName)
+	exists, err := c.robotExists(ctx, projectName, robotName)
 	if err != nil {
 		return nil, false, fmt.Errorf("checking Harbor robot existence: %w", err)
 	}
@@ -308,9 +309,39 @@ func (c *httpClient) projectExists(ctx context.Context, projectName string) (boo
 	}
 }
 
-// robotExists checks whether a Harbor robot account with the given name prefix exists.
-func (c *httpClient) robotExists(ctx context.Context, robotName string) (bool, error) {
-	resp, err := c.do(ctx, http.MethodGet, "/api/v2.0/robots?q=name=~"+robotName, nil)
+// getProjectID returns the numeric ID of a Harbor project by name.
+func (c *httpClient) getProjectID(ctx context.Context, projectName string) (int, error) {
+	resp, err := c.do(ctx, http.MethodGet, "/api/v2.0/projects/"+url.PathEscape(projectName), nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, c.unexpectedStatus("getting Harbor project", resp)
+	}
+
+	var project struct {
+		ProjectID int `json:"project_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&project); err != nil {
+		return 0, fmt.Errorf("decoding Harbor project response: %w", err)
+	}
+	return project.ProjectID, nil
+}
+
+// robotExists checks whether a Harbor robot account exists for the given project.
+func (c *httpClient) robotExists(ctx context.Context, projectName, robotName string) (bool, error) {
+	projectID, err := c.getProjectID(ctx, projectName)
+	if err != nil {
+		return false, err
+	}
+
+	// Build query: Level=project,ProjectID={id},name=~{projectName}+{robotName}
+	q := fmt.Sprintf("Level=project,ProjectID=%d,name=~%s+%s", projectID, projectName, robotName)
+	path := "/api/v2.0/robots?q=" + url.QueryEscape(url.QueryEscape(q)) // double escape for query parameter
+
+	resp, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return false, err
 	}
@@ -327,8 +358,9 @@ func (c *httpClient) robotExists(ctx context.Context, robotName string) (bool, e
 		return false, fmt.Errorf("decoding Harbor robots response: %w", err)
 	}
 
+	fullName := fmt.Sprintf("robot$%s+%s", projectName, robotName)
 	for _, r := range robots {
-		if r.Name == "robot$"+robotName {
+		if r.Name == fullName {
 			return true, nil
 		}
 	}

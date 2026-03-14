@@ -266,31 +266,51 @@ func TestReconcileProjectMembers_AddConflictIsIdempotent(t *testing.T) {
 
 // --- EnsureRobotAccount tests ---
 
-func TestEnsureRobotAccount_Created(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && r.URL.Path == robotsPath {
+// robotTestHandler returns a handler that serves project lookup and robot API requests.
+// robotResponse controls what the robot list endpoint returns.
+func robotTestHandler(t *testing.T, robotResponse []byte, postHandler http.HandlerFunc) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Project lookup: GET /api/v2.0/projects/test-ns
+		if r.Method == http.MethodGet && r.URL.Path == projectsPath+"/test-ns" {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte("[]"))
-			return
-		}
-		if r.Method == http.MethodPost && r.URL.Path == robotsPath {
-			var body map[string]any
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatalf("failed to decode request body: %v", err)
-			}
-			if body["name"] != "workspace-test-ns" {
-				t.Errorf("expected name=workspace-test-ns, got %v", body["name"])
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(map[string]string{
-				"name":   "robot$workspace-test-ns",
-				"secret": "generated-secret-token",
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"project_id": 1, "name": "test-ns",
 			})
 			return
 		}
+		// Robot list: GET /api/v2.0/robots?q=...
+		if r.Method == http.MethodGet && r.URL.Path == robotsPath {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(robotResponse)
+			return
+		}
+		// Robot create: POST /api/v2.0/robots
+		if r.Method == http.MethodPost && r.URL.Path == robotsPath && postHandler != nil {
+			postHandler(w, r)
+			return
+		}
 		t.Errorf("unexpected request: %s %s", r.Method, r.URL)
-	}))
+	}
+}
+
+func TestEnsureRobotAccount_Created(t *testing.T) {
+	postHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("failed to decode request body: %v", err)
+		}
+		if body["name"] != "workspace-test-ns" {
+			t.Errorf("expected name=workspace-test-ns, got %v", body["name"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"name":   "robot$test-ns+workspace-test-ns",
+			"secret": "generated-secret-token",
+		})
+	})
+	srv := httptest.NewServer(robotTestHandler(t, []byte("[]"), postHandler))
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "admin", "password")
@@ -301,8 +321,8 @@ func TestEnsureRobotAccount_Created(t *testing.T) {
 	if !created {
 		t.Error("expected created=true")
 	}
-	if creds.Name != "robot$workspace-test-ns" {
-		t.Errorf("expected Name=robot$workspace-test-ns, got %s", creds.Name)
+	if creds.Name != "robot$test-ns+workspace-test-ns" {
+		t.Errorf("expected Name=robot$test-ns+workspace-test-ns, got %s", creds.Name)
 	}
 	if creds.Secret != "generated-secret-token" {
 		t.Errorf("expected Secret=generated-secret-token, got %s", creds.Secret)
@@ -310,16 +330,10 @@ func TestEnsureRobotAccount_Created(t *testing.T) {
 }
 
 func TestEnsureRobotAccount_AlreadyExists(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && r.URL.Path == robotsPath {
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode([]map[string]any{
-				{"name": "robot$workspace-test-ns", "id": 42},
-			})
-			return
-		}
-		t.Errorf("unexpected request: %s %s", r.Method, r.URL)
-	}))
+	existingRobots, _ := json.Marshal([]map[string]any{
+		{"name": "robot$test-ns+workspace-test-ns", "id": 42},
+	})
+	srv := httptest.NewServer(robotTestHandler(t, existingRobots, nil))
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "admin", "password")
@@ -336,19 +350,11 @@ func TestEnsureRobotAccount_AlreadyExists(t *testing.T) {
 }
 
 func TestEnsureRobotAccount_ConflictIsIdempotent(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && r.URL.Path == robotsPath {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte("[]"))
-			return
-		}
-		if r.Method == http.MethodPost && r.URL.Path == robotsPath {
-			w.WriteHeader(http.StatusConflict)
-			_, _ = w.Write([]byte(`{"errors":[{"code":"CONFLICT","message":"robot account already exists"}]}`))
-			return
-		}
-		t.Errorf("unexpected request: %s %s", r.Method, r.URL)
-	}))
+	postHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"errors":[{"code":"CONFLICT","message":"robot account already exists"}]}`))
+	})
+	srv := httptest.NewServer(robotTestHandler(t, []byte("[]"), postHandler))
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "admin", "password")
@@ -365,15 +371,11 @@ func TestEnsureRobotAccount_ConflictIsIdempotent(t *testing.T) {
 }
 
 func TestEnsureRobotAccount_ServerError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte("[]"))
-			return
-		}
+	postHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte("internal error"))
-	}))
+	})
+	srv := httptest.NewServer(robotTestHandler(t, []byte("[]"), postHandler))
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "admin", "password")
