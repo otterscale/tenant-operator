@@ -57,12 +57,8 @@ func ReconcileHarbor(
 	// 2. Reconcile project members from workspace spec
 	harborMembers := make([]harbor.ProjectMember, 0, len(w.Spec.Members))
 	for _, m := range w.Spec.Members {
-		username := m.Subject
-		if m.Username != nil {
-			username = *m.Username
-		}
 		harborMembers = append(harborMembers, harbor.ProjectMember{
-			Username: username,
+			Username: m.Subject, // we use the subject to identify the harbor user
 			RoleID:   harborRoleID(m.Role),
 		})
 	}
