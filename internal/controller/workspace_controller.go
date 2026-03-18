@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -58,6 +59,8 @@ type WorkspaceReconciler struct {
 	HarborClient harbor.Client // nil disables Harbor integration
 	HarborURL    string
 }
+
+var _ reconcile.Reconciler = (*WorkspaceReconciler)(nil)
 
 // RBAC Permissions required by the controller:
 // +kubebuilder:rbac:groups=tenant.otterscale.io,resources=workspaces,verbs=get;list;watch;create;update;patch;delete

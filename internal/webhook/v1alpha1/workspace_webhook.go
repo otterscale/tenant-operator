@@ -60,6 +60,8 @@ func SetupWorkspaceWebhookWithManager(mgr ctrl.Manager, operatorSA string, maxWo
 // as it is used only for temporary operations and does not need to be deeply copied.
 type WorkspaceCustomDefaulter struct{}
 
+var _ admission.Defaulter[*tenantv1alpha1.Workspace] = (*WorkspaceCustomDefaulter)(nil)
+
 // Default implements admission.Defaulter[*tenantv1alpha1.Workspace] so a webhook will be registered for the Kind Workspace.
 // It ensures that labels with the prefix "user.otterscale.io/" mirror the current member subjects,
 // removing stale entries and preserving all other labels.
@@ -135,6 +137,8 @@ type WorkspaceCustomValidator struct {
 	// Reader is used to look up ClusterRoleBindings and existing Workspaces.
 	Reader client.Reader
 }
+
+var _ admission.Validator[*tenantv1alpha1.Workspace] = (*WorkspaceCustomValidator)(nil)
 
 // ValidateCreate ensures the requesting user is listed as an admin member
 // of the new Workspace and has not exceeded the per-user workspace quota.
