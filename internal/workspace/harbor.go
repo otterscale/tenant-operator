@@ -55,8 +55,12 @@ func ReconcileHarbor(
 	}
 
 	// 2. Reconcile project members from workspace spec
+	//    Service accounts are excluded — they do not have Harbor user identities.
 	harborMembers := make([]harbor.ProjectMember, 0, len(w.Spec.Members))
 	for _, m := range w.Spec.Members {
+		if m.ServiceAccount {
+			continue
+		}
 		harborMembers = append(harborMembers, harbor.ProjectMember{
 			Username: m.Subject, // we use the subject to identify the harbor user
 			RoleID:   harborRoleID(m.Role),
