@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -54,6 +55,9 @@ func ReconcileHelmRepository(ctx context.Context, c client.Client, scheme *runti
 		repo.Labels = labels
 
 		repo.Spec = sourcev1.HelmRepositorySpec{
+			SecretRef: &meta.LocalObjectReference{
+				Name: ImagePullSecretName,
+			},
 			Type:     sourcev1.HelmRepositoryTypeOCI,
 			URL:      repoURL,
 			Interval: metav1.Duration{Duration: 5 * time.Minute},
