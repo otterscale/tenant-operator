@@ -70,6 +70,8 @@ type WorkspaceReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get
 // +kubebuilder:rbac:groups=source.toolkit.fluxcd.io,resources=helmrepositories,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is the main loop for the controller.
@@ -127,6 +129,9 @@ func (r *WorkspaceReconciler) reconcileResources(ctx context.Context, w *tenantv
 	if err := workspace.ReconcileLimitRange(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
 		return err
 	}
+	if err := workspace.ReconcileConfig(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
+		return err
+	}
 	return workspace.ReconcileNetworkIsolation(ctx, r.Client, r.Scheme, w, r.Version)
 }
 
@@ -181,6 +186,7 @@ func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Namespace{}).
 		Owns(&corev1.ResourceQuota{}).
 		Owns(&corev1.LimitRange{}).
+		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Secret{}).
 		Owns(&rbacv1.RoleBinding{}).
 		Owns(&networkingv1.NetworkPolicy{}).
