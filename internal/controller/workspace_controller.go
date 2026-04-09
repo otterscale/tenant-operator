@@ -71,7 +71,7 @@ type WorkspaceReconciler struct {
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=services,verbs=get
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 // +kubebuilder:rbac:groups=source.toolkit.fluxcd.io,resources=helmrepositories,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is the main loop for the controller.
@@ -244,6 +244,17 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 		}
 	} else {
 		newStatus.LimitRangeRef = nil
+	}
+
+	// Update ConfigMap reference
+	var configMap corev1.ConfigMap
+	if err := r.Get(ctx, client.ObjectKey{Name: workspace.ConfigName, Namespace: w.Spec.Namespace}, &configMap); err == nil {
+		newStatus.ConfigMapRef = &tenantv1alpha1.ResourceReference{
+			Name:      workspace.ConfigName,
+			Namespace: w.Spec.Namespace,
+		}
+	} else {
+		newStatus.ConfigMapRef = nil
 	}
 
 	// Update ImagePullSecret reference
