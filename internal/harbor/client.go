@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,6 +28,11 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrUserNotFound is returned when Harbor reports the target user does not exist.
+// Callers treat this as a skip signal rather than a hard failure, because the user
+// may be provisioned asynchronously (e.g. on first OIDC login).
+var ErrUserNotFound = errors.New("harbor user not found")
 
 // Harbor project role IDs.
 const (
@@ -43,7 +49,12 @@ type Client interface {
 	// ReconcileProjectMembers synchronizes the Harbor project membership to match
 	// the desired list of members. It adds missing members, updates roles that
 	// have changed, and removes members that are no longer desired.
-	ReconcileProjectMembers(ctx context.Context, projectName string, desired []ProjectMember) error
+	//
+	// Desired users that do not yet exist in Harbor (404 on add) are skipped and
+	// returned in missingUsers so the caller can schedule a later retry. Skipping
+	// one user does not abort the rest of the loop; an error is only returned for
+	// unrecoverable failures.
+	ReconcileProjectMembers(ctx context.Context, projectName string, desired []ProjectMember) (missingUsers []string, err error)
 
 	// EnsureRobotAccount ensures a robot account exists for the given project.
 	// Returns the credentials and whether the robot was newly created.
@@ -123,23 +134,27 @@ type existingMember struct {
 
 // ReconcileProjectMembers synchronizes the Harbor project membership to match
 // the desired list. It lists current members, then adds/updates/removes as needed.
-func (c *httpClient) ReconcileProjectMembers(ctx context.Context, projectName string, desired []ProjectMember) error {
+//
+// If Harbor returns 404 when adding a user, the user is skipped and recorded in
+// missingUsers — the rest of the reconcile loop continues. Harbor users are
+// provisioned on first login, so missing users are expected to appear later.
+func (c *httpClient) ReconcileProjectMembers(ctx context.Context, projectName string, desired []ProjectMember) ([]string, error) {
 	basePath := fmt.Sprintf("/api/v2.0/projects/%s/members", projectName)
 
 	// List current members
 	resp, err := c.do(ctx, http.MethodGet, basePath, nil)
 	if err != nil {
-		return fmt.Errorf("listing project members: %w", err)
+		return nil, fmt.Errorf("listing project members: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return c.unexpectedStatus("listing project members", resp)
+		return nil, c.unexpectedStatus("listing project members", resp)
 	}
 
 	var existing []existingMember
 	if err := json.NewDecoder(resp.Body).Decode(&existing); err != nil {
-		return fmt.Errorf("decoding project members: %w", err)
+		return nil, fmt.Errorf("decoding project members: %w", err)
 	}
 
 	// Build lookup of existing members by username. We will remove members from this
@@ -149,13 +164,15 @@ func (c *httpClient) ReconcileProjectMembers(ctx context.Context, projectName st
 		existingByName[m.Username] = m
 	}
 
+	var missing []string
+
 	// Add or update members, and track which existing members are still desired.
 	for _, d := range desired {
 		if cur, ok := existingByName[d.Username]; ok {
 			// Exists — update role if changed
 			if cur.RoleID != d.RoleID {
 				if err := c.updateProjectMember(ctx, basePath, cur.ID, d.RoleID); err != nil {
-					return fmt.Errorf("updating member %s: %w", d.Username, err)
+					return nil, fmt.Errorf("updating member %s: %w", d.Username, err)
 				}
 			}
 			// Member is desired, so remove from the map of members to be deleted.
@@ -163,7 +180,11 @@ func (c *httpClient) ReconcileProjectMembers(ctx context.Context, projectName st
 		} else {
 			// New member — add
 			if err := c.addProjectMember(ctx, basePath, d.Username, d.RoleID); err != nil {
-				return fmt.Errorf("adding member %s: %w", d.Username, err)
+				if errors.Is(err, ErrUserNotFound) {
+					missing = append(missing, d.Username)
+					continue
+				}
+				return nil, fmt.Errorf("adding member %s: %w", d.Username, err)
 			}
 		}
 	}
@@ -171,11 +192,11 @@ func (c *httpClient) ReconcileProjectMembers(ctx context.Context, projectName st
 	// Remove members no longer in desired list (the ones left in the map).
 	for _, cur := range existingByName {
 		if err := c.deleteProjectMember(ctx, basePath, cur.ID); err != nil {
-			return fmt.Errorf("removing member %s: %w", cur.Username, err)
+			return nil, fmt.Errorf("removing member %s: %w", cur.Username, err)
 		}
 	}
 
-	return nil
+	return missing, nil
 }
 
 // addProjectMember adds a user to the Harbor project with the given role.
@@ -195,6 +216,11 @@ func (c *httpClient) addProjectMember(ctx context.Context, basePath, username st
 	switch resp.StatusCode {
 	case http.StatusCreated, http.StatusConflict:
 		return nil
+	case http.StatusNotFound:
+		// Harbor returns 404 when the target user has not been provisioned yet
+		// (users are created on first OIDC login). Surface a sentinel so callers
+		// can skip-and-retry instead of failing the whole reconcile.
+		return ErrUserNotFound
 	default:
 		return c.unexpectedStatus("adding project member", resp)
 	}
