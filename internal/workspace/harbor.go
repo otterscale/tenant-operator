@@ -36,6 +36,10 @@ import (
 
 // ReconcileHarbor ensures the Harbor project, robot account, docker-registry Secret,
 // and default ServiceAccount imagePullSecrets are configured for the workspace.
+//
+// Returns the list of workspace members whose Harbor user accounts do not yet
+// exist. The rest of reconcile completes normally; the caller is expected to
+// requeue so missing members get added once Harbor provisions them.
 func ReconcileHarbor(
 	ctx context.Context,
 	c client.Client,
@@ -44,14 +48,14 @@ func ReconcileHarbor(
 	version string,
 	harborClient harbor.Client,
 	harborURL string,
-) error {
+) ([]string, error) {
 	logger := log.FromContext(ctx)
 	projectName := w.Spec.Namespace
 	robotName := w.Spec.Namespace
 
 	// 1. Ensure Harbor project exists
 	if err := harborClient.EnsureProject(ctx, projectName); err != nil {
-		return fmt.Errorf("ensuring Harbor project: %w", err)
+		return nil, fmt.Errorf("ensuring Harbor project: %w", err)
 	}
 
 	// 2. Reconcile project members from workspace spec
@@ -66,21 +70,25 @@ func ReconcileHarbor(
 			RoleID:   harborRoleID(m.Role),
 		})
 	}
-	if err := harborClient.ReconcileProjectMembers(ctx, projectName, harborMembers); err != nil {
-		return fmt.Errorf("reconciling Harbor project members: %w", err)
+	missingMembers, err := harborClient.ReconcileProjectMembers(ctx, projectName, harborMembers)
+	if err != nil {
+		return nil, fmt.Errorf("reconciling Harbor project members: %w", err)
+	}
+	if len(missingMembers) > 0 {
+		logger.Info("Some Harbor users do not exist yet; skipping and will retry on next reconcile", "missing", missingMembers)
 	}
 
 	// 3. Ensure robot account exists
 	creds, created, err := harborClient.EnsureRobotAccount(ctx, projectName, robotName)
 	if err != nil {
-		return fmt.Errorf("ensuring Harbor robot account: %w", err)
+		return nil, fmt.Errorf("ensuring Harbor robot account: %w", err)
 	}
 
 	// 3. Create docker-registry Secret only when robot was newly created
 	if created {
 		dockerConfigJSON, err := buildDockerConfigJSON(harborURL, creds.Name, creds.Secret)
 		if err != nil {
-			return fmt.Errorf("building docker config JSON: %w", err)
+			return nil, fmt.Errorf("building docker config JSON: %w", err)
 		}
 
 		secret := &corev1.Secret{
@@ -99,7 +107,7 @@ func ReconcileHarbor(
 			return ctrlutil.SetControllerReference(w, secret, scheme)
 		})
 		if err != nil {
-			return fmt.Errorf("reconciling image pull Secret: %w", err)
+			return nil, fmt.Errorf("reconciling image pull Secret: %w", err)
 		}
 		if op != ctrlutil.OperationResultNone {
 			logger.Info("Image pull Secret reconciled", "operation", op, "name", secret.Name)
@@ -111,7 +119,7 @@ func ReconcileHarbor(
 		secret := &corev1.Secret{}
 		if err := c.Get(ctx, types.NamespacedName{Name: ImagePullSecretName, Namespace: w.Spec.Namespace}, secret); err != nil {
 			if client.IgnoreNotFound(err) != nil {
-				return fmt.Errorf("checking image pull Secret: %w", err)
+				return nil, fmt.Errorf("checking image pull Secret: %w", err)
 			}
 			logger.Info("Image pull Secret missing but Harbor robot already exists, Secret cannot be recreated without regenerating robot credentials")
 		}
@@ -119,10 +127,10 @@ func ReconcileHarbor(
 
 	// 4. Patch default ServiceAccount to include imagePullSecrets
 	if err := ensureImagePullSecret(ctx, c, w.Spec.Namespace); err != nil {
-		return fmt.Errorf("patching default ServiceAccount: %w", err)
+		return nil, fmt.Errorf("patching default ServiceAccount: %w", err)
 	}
 
-	return nil
+	return missingMembers, nil
 }
 
 // ensureImagePullSecret patches the default ServiceAccount to include the workspace image pull secret.

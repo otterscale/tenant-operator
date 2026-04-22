@@ -139,7 +139,7 @@ func TestReconcileProjectMembers_AddsNewMembers(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "admin", "password")
-	err := c.ReconcileProjectMembers(context.Background(), "test-project", []ProjectMember{
+	_, err := c.ReconcileProjectMembers(context.Background(), "test-project", []ProjectMember{
 		{Username: "alice", RoleID: RoleProjectAdmin},
 		{Username: "bob", RoleID: RoleDeveloper},
 	})
@@ -175,7 +175,7 @@ func TestReconcileProjectMembers_UpdatesRole(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "admin", "password")
-	err := c.ReconcileProjectMembers(context.Background(), "test-project", []ProjectMember{
+	_, err := c.ReconcileProjectMembers(context.Background(), "test-project", []ProjectMember{
 		{Username: "alice", RoleID: RoleProjectAdmin},
 	})
 	if err != nil {
@@ -207,7 +207,7 @@ func TestReconcileProjectMembers_RemovesStaleMember(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "admin", "password")
-	err := c.ReconcileProjectMembers(context.Background(), "test-project", []ProjectMember{
+	_, err := c.ReconcileProjectMembers(context.Background(), "test-project", []ProjectMember{
 		{Username: "alice", RoleID: RoleProjectAdmin},
 	})
 	if err != nil {
@@ -232,7 +232,7 @@ func TestReconcileProjectMembers_NoChanges(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "admin", "password")
-	err := c.ReconcileProjectMembers(context.Background(), "test-project", []ProjectMember{
+	_, err := c.ReconcileProjectMembers(context.Background(), "test-project", []ProjectMember{
 		{Username: "alice", RoleID: RoleProjectAdmin},
 	})
 	if err != nil {
@@ -256,11 +256,58 @@ func TestReconcileProjectMembers_AddConflictIsIdempotent(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "admin", "password")
-	err := c.ReconcileProjectMembers(context.Background(), "test-project", []ProjectMember{
+	_, err := c.ReconcileProjectMembers(context.Background(), "test-project", []ProjectMember{
 		{Username: "alice", RoleID: RoleProjectAdmin},
 	})
 	if err != nil {
 		t.Fatalf("ReconcileProjectMembers should treat 409 as success, got: %v", err)
+	}
+}
+
+func TestReconcileProjectMembers_SkipsMissingUser(t *testing.T) {
+	var addedUsernames []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == membersPath {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("[]"))
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == membersPath {
+			var body struct {
+				MemberUser struct {
+					Username string `json:"username"`
+				} `json:"member_user"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("failed to decode body: %v", err)
+			}
+			if body.MemberUser.Username == "ghost" {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"errors":[{"code":"NOT_FOUND","message":"ghost not found"}]}`))
+				return
+			}
+			addedUsernames = append(addedUsernames, body.MemberUser.Username)
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
+		t.Errorf("unexpected request: %s %s", r.Method, r.URL)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "admin", "password")
+	missing, err := c.ReconcileProjectMembers(context.Background(), "test-project", []ProjectMember{
+		{Username: "alice", RoleID: RoleProjectAdmin},
+		{Username: "ghost", RoleID: RoleDeveloper},
+		{Username: "bob", RoleID: RoleDeveloper},
+	})
+	if err != nil {
+		t.Fatalf("ReconcileProjectMembers should skip 404, got error: %v", err)
+	}
+	if len(missing) != 1 || missing[0] != "ghost" {
+		t.Errorf("expected missing=[ghost], got %v", missing)
+	}
+	if len(addedUsernames) != 2 {
+		t.Errorf("expected alice and bob added, got %v", addedUsernames)
 	}
 }
 

@@ -20,7 +20,9 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -74,6 +76,11 @@ type WorkspaceReconciler struct {
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 // +kubebuilder:rbac:groups=source.toolkit.fluxcd.io,resources=helmrepositories,verbs=get;list;watch;create;update;patch;delete
 
+// missingHarborMembersRequeue is how long to wait before retrying when Harbor
+// members are missing. Harbor provisions users on first OIDC login, so the
+// retry window just needs to be short enough to pick them up promptly.
+const missingHarborMembersRequeue = 5 * time.Minute
+
 // Reconcile is the main loop for the controller.
 // It implements the level-triggered reconciliation logic with a thin orchestration pattern:
 // Fetch -> Domain Sync -> Status Update.
@@ -95,44 +102,60 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	// 2. Reconcile all domain resources
-	if err := r.reconcileResources(ctx, &w); err != nil {
+	missingHarborMembers, err := r.reconcileResources(ctx, &w)
+	if err != nil {
 		return r.handleReconcileError(ctx, &w, err)
 	}
 
 	// 3. Update Status (Reflect the observed state back to the user)
-	if err := r.updateStatus(ctx, &w); err != nil {
+	if err := r.updateStatus(ctx, &w, missingHarborMembers); err != nil {
 		return ctrl.Result{}, err
+	}
+
+	// 4. Requeue if some Harbor users haven't been provisioned yet so they get
+	//    added once Harbor has them. There's no watch on Harbor users, so a
+	//    timed requeue is the only way these get picked up without a spec change.
+	if len(missingHarborMembers) > 0 {
+		return ctrl.Result{RequeueAfter: missingHarborMembersRequeue}, nil
 	}
 
 	return ctrl.Result{}, nil
 }
 
 // reconcileResources orchestrates the domain-level resource sync in order.
-func (r *WorkspaceReconciler) reconcileResources(ctx context.Context, w *tenantv1alpha1.Workspace) error {
+// Returns the list of workspace members whose Harbor user accounts do not yet
+// exist — the caller requeues so they get added when Harbor provisions them.
+func (r *WorkspaceReconciler) reconcileResources(ctx context.Context, w *tenantv1alpha1.Workspace) ([]string, error) {
 	if err := workspace.ReconcileNamespace(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
-		return err
+		return nil, err
 	}
+	var missingHarborMembers []string
 	if r.HarborClient != nil {
-		if err := workspace.ReconcileHarbor(ctx, r.Client, r.Scheme, w, r.Version, r.HarborClient, r.HarborURL); err != nil {
-			return err
+		missing, err := workspace.ReconcileHarbor(ctx, r.Client, r.Scheme, w, r.Version, r.HarborClient, r.HarborURL)
+		if err != nil {
+			return nil, err
 		}
+		missingHarborMembers = missing
 		if err := workspace.ReconcileHelmRepository(ctx, r.Client, r.Scheme, w, r.Version, r.HarborURL); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if err := workspace.ReconcileRoleBindings(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
-		return err
+		return nil, err
 	}
 	if err := workspace.ReconcileResourceQuota(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
-		return err
+		return nil, err
 	}
 	if err := workspace.ReconcileLimitRange(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
-		return err
+		return nil, err
 	}
 	if err := workspace.ReconcileConfig(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
-		return err
+		return nil, err
 	}
-	return workspace.ReconcileNetworkIsolation(ctx, r.Client, r.Scheme, w, r.Version)
+	if err := workspace.ReconcileNetworkIsolation(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
+		return nil, err
+	}
+	return missingHarborMembers, nil
 }
 
 // handleReconcileError categorizes errors and updates status accordingly.
@@ -196,7 +219,9 @@ func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // updateStatus calculates the status based on the current observed state and patches the resource.
-func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha1.Workspace) error {
+// When missingHarborMembers is non-empty, Ready is set to False with reason
+// HarborMembersPending so the Workspace surfaces the partial state to users.
+func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha1.Workspace, missingHarborMembers []string) error {
 	newStatus := w.Status.DeepCopy()
 	newStatus.ObservedGeneration = w.Generation
 
@@ -287,14 +312,24 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 		newStatus.NetworkPolicyRef = nil
 	}
 
-	// Set Ready condition
-	meta.SetStatusCondition(&newStatus.Conditions, metav1.Condition{
+	// Set Ready condition. If some Harbor members are missing, report the
+	// partial state so users can see why those identities aren't in Harbor yet.
+	readyCondition := metav1.Condition{
 		Type:               workspace.ConditionTypeReady,
 		Status:             metav1.ConditionTrue,
 		Reason:             "Reconciled",
 		Message:            "Workspace resources are successfully reconciled",
 		ObservedGeneration: w.Generation,
-	})
+	}
+	if len(missingHarborMembers) > 0 {
+		readyCondition.Status = metav1.ConditionFalse
+		readyCondition.Reason = "HarborMembersPending"
+		readyCondition.Message = fmt.Sprintf(
+			"Waiting for Harbor users to be provisioned: %s",
+			strings.Join(missingHarborMembers, ", "),
+		)
+	}
+	meta.SetStatusCondition(&newStatus.Conditions, readyCondition)
 
 	// Sort conditions by type for stable ordering
 	slices.SortFunc(newStatus.Conditions, func(a, b metav1.Condition) int {
