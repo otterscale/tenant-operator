@@ -19,8 +19,8 @@ package workspace
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net"
-	"os"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -37,6 +37,9 @@ import (
 
 // Service coordinates for gateway endpoint resolution.
 const (
+	globalConfigNamespace = "otterscale-system"
+	globalConfigName      = "global-workspace-config"
+
 	modelGatewayNamespace   = "llm-d"
 	modelGatewayServiceName = "otterscale-llm-d-infra-inference-gateway-istio"
 	modelGatewayPortName    = "default"
@@ -44,9 +47,6 @@ const (
 	objectGatewayNamespace   = "rook-ceph"
 	objectGatewayServiceName = "rook-ceph-rgw-ceph-objectstore-external"
 	objectGatewayPortName    = "rgw"
-
-	modelGatewayEndpointEnv  = "MODEL_GATEWAY_ENDPOINT"
-	objectGatewayEndpointEnv = "OBJECT_GATEWAY_ENDPOINT"
 )
 
 // ReconcileConfig ensures a workspace-config ConfigMap exists in the workspace
@@ -88,12 +88,16 @@ func ReconcileConfig(ctx context.Context, c client.Client, scheme *runtime.Schem
 		}
 	}
 
-	// Environment variables override auto-discovered endpoints when set.
-	if v, ok := os.LookupEnv(modelGatewayEndpointEnv); ok {
-		data["ModelGatewayEndpoint"] = v
-	}
-	if v, ok := os.LookupEnv(objectGatewayEndpointEnv); ok {
-		data["ObjectGatewayEndpoint"] = v
+	// The otterscale-system ConfigMap overrides any auto-discovered endpoints.
+	var globalOverrides corev1.ConfigMap
+	switch err := c.Get(ctx, types.NamespacedName{Name: globalConfigName, Namespace: globalConfigNamespace}, &globalOverrides); {
+	case apierrors.IsNotFound(err):
+		logger.Info("Global workspace-config ConfigMap not found, no overrides applied",
+			"namespace", globalConfigNamespace, "name", globalConfigName)
+	case err != nil:
+		return err
+	default:
+		maps.Copy(data, globalOverrides.Data)
 	}
 
 	if len(data) == 0 {
