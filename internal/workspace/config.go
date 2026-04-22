@@ -19,6 +19,7 @@ package workspace
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net"
 
 	corev1 "k8s.io/api/core/v1"
@@ -36,6 +37,9 @@ import (
 
 // Service coordinates for gateway endpoint resolution.
 const (
+	globalConfigNamespace = "otterscale-system"
+	globalConfigName      = "global-workspace-config"
+
 	modelGatewayNamespace   = "llm-d"
 	modelGatewayServiceName = "otterscale-llm-d-infra-inference-gateway-istio"
 	modelGatewayPortName    = "default"
@@ -52,41 +56,52 @@ const (
 func ReconcileConfig(ctx context.Context, c client.Client, scheme *runtime.Scheme, w *tenantv1alpha1.Workspace, version string) error {
 	logger := log.FromContext(ctx)
 
-	clusterIP, err := resolveClusterIP(ctx, c)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.Info("kubeadm-config not found, skipping workspace-config ConfigMap creation")
-			return nil
-		}
-		return err
-	}
-
 	data := make(map[string]string)
 
-	modelNodePort, err := resolveServiceNodePort(ctx, c, modelGatewayNamespace, modelGatewayServiceName, modelGatewayPortName)
+	clusterIP, err := resolveClusterIP(ctx, c)
 	switch {
 	case apierrors.IsNotFound(err):
-		logger.Info("Model gateway service not found, skipping ModelGatewayEndpoint",
-			"namespace", modelGatewayNamespace, "service", modelGatewayServiceName)
+		logger.Info("kubeadm-config not found, skipping service-based endpoint discovery")
 	case err != nil:
 		return err
 	default:
-		data["ModelGatewayEndpoint"] = fmt.Sprintf("%s:%d", clusterIP, modelNodePort)
+		modelNodePort, err := resolveServiceNodePort(ctx, c, modelGatewayNamespace, modelGatewayServiceName, modelGatewayPortName)
+		switch {
+		case apierrors.IsNotFound(err):
+			logger.Info("Model gateway service not found, skipping ModelGatewayEndpoint",
+				"namespace", modelGatewayNamespace, "service", modelGatewayServiceName)
+		case err != nil:
+			return err
+		default:
+			data["ModelGatewayEndpoint"] = fmt.Sprintf("%s:%d", clusterIP, modelNodePort)
+		}
+
+		objectNodePort, err := resolveServiceNodePort(ctx, c, objectGatewayNamespace, objectGatewayServiceName, objectGatewayPortName)
+		switch {
+		case apierrors.IsNotFound(err):
+			logger.Info("Object gateway service not found, skipping ObjectGatewayEndpoint",
+				"namespace", objectGatewayNamespace, "service", objectGatewayServiceName)
+		case err != nil:
+			return err
+		default:
+			data["ObjectGatewayEndpoint"] = fmt.Sprintf("%s:%d", clusterIP, objectNodePort)
+		}
 	}
 
-	objectNodePort, err := resolveServiceNodePort(ctx, c, objectGatewayNamespace, objectGatewayServiceName, objectGatewayPortName)
-	switch {
+	// The otterscale-system ConfigMap overrides any auto-discovered endpoints.
+	var globalOverrides corev1.ConfigMap
+	switch err := c.Get(ctx, types.NamespacedName{Name: globalConfigName, Namespace: globalConfigNamespace}, &globalOverrides); {
 	case apierrors.IsNotFound(err):
-		logger.Info("Object gateway service not found, skipping ObjectGatewayEndpoint",
-			"namespace", objectGatewayNamespace, "service", objectGatewayServiceName)
+		logger.Info("Global workspace-config ConfigMap not found, no overrides applied",
+			"namespace", globalConfigNamespace, "name", globalConfigName)
 	case err != nil:
 		return err
 	default:
-		data["ObjectGatewayEndpoint"] = fmt.Sprintf("%s:%d", clusterIP, objectNodePort)
+		maps.Copy(data, globalOverrides.Data)
 	}
 
 	if len(data) == 0 {
-		logger.Info("No gateway services available, skipping workspace-config ConfigMap creation")
+		logger.Info("No gateway endpoints configured, skipping workspace-config ConfigMap creation")
 		return nil
 	}
 
