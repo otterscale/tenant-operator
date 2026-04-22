@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -43,6 +44,9 @@ const (
 	objectGatewayNamespace   = "rook-ceph"
 	objectGatewayServiceName = "rook-ceph-rgw-ceph-objectstore-external"
 	objectGatewayPortName    = "rgw"
+
+	modelGatewayEndpointEnv  = "MODEL_GATEWAY_ENDPOINT"
+	objectGatewayEndpointEnv = "OBJECT_GATEWAY_ENDPOINT"
 )
 
 // ReconcileConfig ensures a workspace-config ConfigMap exists in the workspace
@@ -52,41 +56,48 @@ const (
 func ReconcileConfig(ctx context.Context, c client.Client, scheme *runtime.Scheme, w *tenantv1alpha1.Workspace, version string) error {
 	logger := log.FromContext(ctx)
 
-	clusterIP, err := resolveClusterIP(ctx, c)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.Info("kubeadm-config not found, skipping workspace-config ConfigMap creation")
-			return nil
-		}
-		return err
-	}
-
 	data := make(map[string]string)
 
-	modelNodePort, err := resolveServiceNodePort(ctx, c, modelGatewayNamespace, modelGatewayServiceName, modelGatewayPortName)
+	clusterIP, err := resolveClusterIP(ctx, c)
 	switch {
 	case apierrors.IsNotFound(err):
-		logger.Info("Model gateway service not found, skipping ModelGatewayEndpoint",
-			"namespace", modelGatewayNamespace, "service", modelGatewayServiceName)
+		logger.Info("kubeadm-config not found, skipping service-based endpoint discovery")
 	case err != nil:
 		return err
 	default:
-		data["ModelGatewayEndpoint"] = fmt.Sprintf("%s:%d", clusterIP, modelNodePort)
+		modelNodePort, err := resolveServiceNodePort(ctx, c, modelGatewayNamespace, modelGatewayServiceName, modelGatewayPortName)
+		switch {
+		case apierrors.IsNotFound(err):
+			logger.Info("Model gateway service not found, skipping ModelGatewayEndpoint",
+				"namespace", modelGatewayNamespace, "service", modelGatewayServiceName)
+		case err != nil:
+			return err
+		default:
+			data["ModelGatewayEndpoint"] = fmt.Sprintf("%s:%d", clusterIP, modelNodePort)
+		}
+
+		objectNodePort, err := resolveServiceNodePort(ctx, c, objectGatewayNamespace, objectGatewayServiceName, objectGatewayPortName)
+		switch {
+		case apierrors.IsNotFound(err):
+			logger.Info("Object gateway service not found, skipping ObjectGatewayEndpoint",
+				"namespace", objectGatewayNamespace, "service", objectGatewayServiceName)
+		case err != nil:
+			return err
+		default:
+			data["ObjectGatewayEndpoint"] = fmt.Sprintf("%s:%d", clusterIP, objectNodePort)
+		}
 	}
 
-	objectNodePort, err := resolveServiceNodePort(ctx, c, objectGatewayNamespace, objectGatewayServiceName, objectGatewayPortName)
-	switch {
-	case apierrors.IsNotFound(err):
-		logger.Info("Object gateway service not found, skipping ObjectGatewayEndpoint",
-			"namespace", objectGatewayNamespace, "service", objectGatewayServiceName)
-	case err != nil:
-		return err
-	default:
-		data["ObjectGatewayEndpoint"] = fmt.Sprintf("%s:%d", clusterIP, objectNodePort)
+	// Environment variables override auto-discovered endpoints when set.
+	if v, ok := os.LookupEnv(modelGatewayEndpointEnv); ok {
+		data["ModelGatewayEndpoint"] = v
+	}
+	if v, ok := os.LookupEnv(objectGatewayEndpointEnv); ok {
+		data["ObjectGatewayEndpoint"] = v
 	}
 
 	if len(data) == 0 {
-		logger.Info("No gateway services available, skipping workspace-config ConfigMap creation")
+		logger.Info("No gateway endpoints configured, skipping workspace-config ConfigMap creation")
 		return nil
 	}
 
