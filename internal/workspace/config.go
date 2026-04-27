@@ -47,6 +47,10 @@ const (
 	objectGatewayNamespace   = "rook-ceph"
 	objectGatewayServiceName = "rook-ceph-rgw-ceph-objectstore-external"
 	objectGatewayPortName    = "rgw"
+
+	// serviceEndpointHint is a placeholder shown to users indicating where to
+	// substitute the actual NodePort number for the ServiceEndpoint.
+	serviceEndpointHint = "<NodePort>"
 )
 
 // ReconcileConfig ensures a workspace-config ConfigMap exists in the workspace
@@ -86,6 +90,8 @@ func ReconcileConfig(ctx context.Context, c client.Client, scheme *runtime.Schem
 		default:
 			data["ObjectGatewayEndpoint"] = fmt.Sprintf("%s:%d", clusterIP, objectNodePort)
 		}
+
+		data["ServiceEndpoint"] = fmt.Sprintf("%s:%s", clusterIP, serviceEndpointHint)
 	}
 
 	// The otterscale-system ConfigMap overrides any auto-discovered endpoints.
