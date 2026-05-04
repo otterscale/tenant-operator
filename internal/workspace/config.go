@@ -40,13 +40,19 @@ const (
 	globalConfigNamespace = "otterscale-system"
 	globalConfigName      = "global-workspace-config"
 
-	modelGatewayNamespace   = "llm-d"
-	modelGatewayServiceName = "otterscale-llm-d-infra-inference-gateway-istio"
-	modelGatewayPortName    = "default"
+	modelGatewayPortName  = "http-80"
+	objectGatewayPortName = "rgw"
+)
 
-	objectGatewayNamespace   = "rook-ceph"
-	objectGatewayServiceName = "rook-ceph-rgw-ceph-objectstore-external"
-	objectGatewayPortName    = "rgw"
+var (
+	modelGatewayLabels = map[string]string{
+		"gateway.envoyproxy.io/owning-gateway-name":      "kserve-ingress-gateway",
+		"gateway.envoyproxy.io/owning-gateway-namespace": "kserve",
+	}
+	objectGatewayLabels = map[string]string{
+		"rook_cluster":      "rook-ceph",
+		"rook_object_store": "ceph-objectstore",
+	}
 )
 
 // ReconcileConfig ensures a workspace-config ConfigMap exists in the workspace
@@ -65,22 +71,22 @@ func ReconcileConfig(ctx context.Context, c client.Client, scheme *runtime.Schem
 	case err != nil:
 		return err
 	default:
-		modelNodePort, err := resolveServiceNodePort(ctx, c, modelGatewayNamespace, modelGatewayServiceName, modelGatewayPortName)
+		modelNodePort, err := resolveServiceNodePort(ctx, c, modelGatewayLabels, modelGatewayPortName)
 		switch {
 		case apierrors.IsNotFound(err):
 			logger.Info("Model gateway service not found, skipping ModelGatewayEndpoint",
-				"namespace", modelGatewayNamespace, "service", modelGatewayServiceName)
+				"labels", modelGatewayLabels)
 		case err != nil:
 			return err
 		default:
 			data["ModelGatewayEndpoint"] = fmt.Sprintf("%s:%d", clusterIP, modelNodePort)
 		}
 
-		objectNodePort, err := resolveServiceNodePort(ctx, c, objectGatewayNamespace, objectGatewayServiceName, objectGatewayPortName)
+		objectNodePort, err := resolveServiceNodePort(ctx, c, objectGatewayLabels, objectGatewayPortName)
 		switch {
 		case apierrors.IsNotFound(err):
 			logger.Info("Object gateway service not found, skipping ObjectGatewayEndpoint",
-				"namespace", objectGatewayNamespace, "service", objectGatewayServiceName)
+				"labels", objectGatewayLabels)
 		case err != nil:
 			return err
 		default:
@@ -166,21 +172,27 @@ func resolveClusterIP(ctx context.Context, c client.Client) (string, error) {
 	return host, nil
 }
 
-// resolveServiceNodePort reads a Service and returns the NodePort for the named port.
-func resolveServiceNodePort(ctx context.Context, c client.Client, namespace, name, portName string) (int32, error) {
-	var svc corev1.Service
-	if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, &svc); err != nil {
+// resolveServiceNodePort finds a Service matching the given labels and returns
+// the NodePort for the named port. Returns an apierrors.NotFound error if no
+// matching Service exists.
+func resolveServiceNodePort(ctx context.Context, c client.Client, labels map[string]string, portName string) (int32, error) {
+	var svcList corev1.ServiceList
+	if err := c.List(ctx, &svcList, client.MatchingLabels(labels)); err != nil {
 		return 0, err
 	}
+	if len(svcList.Items) == 0 {
+		return 0, apierrors.NewNotFound(corev1.Resource("services"), fmt.Sprintf("labels=%v", labels))
+	}
+	svc := svcList.Items[0]
 
 	for _, port := range svc.Spec.Ports {
 		if port.Name == portName {
 			if port.NodePort == 0 {
-				return 0, fmt.Errorf("service %s/%s port %q has no NodePort assigned", namespace, name, portName)
+				return 0, fmt.Errorf("service %s/%s port %q has no NodePort assigned", svc.Namespace, svc.Name, portName)
 			}
 			return port.NodePort, nil
 		}
 	}
 
-	return 0, fmt.Errorf("service %s/%s has no port named %q", namespace, name, portName)
+	return 0, fmt.Errorf("service %s/%s has no port named %q", svc.Namespace, svc.Name, portName)
 }
