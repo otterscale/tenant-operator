@@ -183,6 +183,9 @@ func resolveServiceNodePort(ctx context.Context, c client.Client, labels map[str
 	if len(svcList.Items) == 0 {
 		return 0, apierrors.NewNotFound(corev1.Resource("services"), fmt.Sprintf("labels=%v", labels))
 	}
+	if len(svcList.Items) > 1 {
+		return 0, fmt.Errorf("multiple services found matching labels %v", labels)
+	}
 	svc := svcList.Items[0]
 
 	for _, port := range svc.Spec.Ports {
