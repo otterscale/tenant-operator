@@ -40,8 +40,7 @@ const (
 	globalConfigNamespace = "otterscale-system"
 	globalConfigName      = "global-workspace-config"
 
-	modelGatewayPortName  = "http-80"
-	objectGatewayPortName = "rgw"
+	portName = "http-80"
 )
 
 var (
@@ -50,8 +49,8 @@ var (
 		"gateway.envoyproxy.io/owning-gateway-namespace": "kserve",
 	}
 	objectGatewayLabels = map[string]string{
-		"rook_cluster":      "rook-ceph",
-		"rook_object_store": "ceph-objectstore",
+		"gateway.envoyproxy.io/owning-gateway-name":      "rook-ceph-ingress-gateway",
+		"gateway.envoyproxy.io/owning-gateway-namespace": "rook-ceph",
 	}
 )
 
@@ -71,7 +70,7 @@ func ReconcileConfig(ctx context.Context, c client.Client, scheme *runtime.Schem
 	case err != nil:
 		return err
 	default:
-		modelNodePort, err := resolveServiceNodePort(ctx, c, modelGatewayLabels, modelGatewayPortName)
+		modelNodePort, err := resolveServiceNodePort(ctx, c, modelGatewayLabels, portName)
 		switch {
 		case apierrors.IsNotFound(err):
 			logger.Info("Model gateway service not found, skipping ModelGatewayEndpoint",
@@ -82,7 +81,7 @@ func ReconcileConfig(ctx context.Context, c client.Client, scheme *runtime.Schem
 			data["ModelGatewayEndpoint"] = fmt.Sprintf("%s:%d", clusterIP, modelNodePort)
 		}
 
-		objectNodePort, err := resolveServiceNodePort(ctx, c, objectGatewayLabels, objectGatewayPortName)
+		objectNodePort, err := resolveServiceNodePort(ctx, c, objectGatewayLabels, portName)
 		switch {
 		case apierrors.IsNotFound(err):
 			logger.Info("Object gateway service not found, skipping ObjectGatewayEndpoint",
