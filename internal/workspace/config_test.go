@@ -116,8 +116,7 @@ func TestResolveServiceNodePort(t *testing.T) {
 	tests := []struct {
 		name     string
 		objects  []metav1.Object
-		ns       string
-		svcName  string
+		labels   map[string]string
 		portName string
 		wantPort int32
 		wantErr  bool
@@ -126,7 +125,11 @@ func TestResolveServiceNodePort(t *testing.T) {
 			name: "valid service with named nodeport",
 			objects: []metav1.Object{
 				&corev1.Service{
-					ObjectMeta: metav1.ObjectMeta{Name: "my-svc", Namespace: "my-ns"},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "my-svc",
+						Namespace: "my-ns",
+						Labels:    map[string]string{"app": "demo"},
+					},
 					Spec: corev1.ServiceSpec{
 						Type: corev1.ServiceTypeNodePort,
 						Ports: []corev1.ServicePort{
@@ -136,16 +139,14 @@ func TestResolveServiceNodePort(t *testing.T) {
 					},
 				},
 			},
-			ns:       "my-ns",
-			svcName:  "my-svc",
+			labels:   map[string]string{"app": "demo"},
 			portName: "grpc",
 			wantPort: 30001,
 		},
 		{
 			name:     "service not found",
 			objects:  []metav1.Object{},
-			ns:       "my-ns",
-			svcName:  "missing-svc",
+			labels:   map[string]string{"app": "missing"},
 			portName: "http",
 			wantErr:  true,
 		},
@@ -153,7 +154,11 @@ func TestResolveServiceNodePort(t *testing.T) {
 			name: "port name not found",
 			objects: []metav1.Object{
 				&corev1.Service{
-					ObjectMeta: metav1.ObjectMeta{Name: "my-svc", Namespace: "my-ns"},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "my-svc",
+						Namespace: "my-ns",
+						Labels:    map[string]string{"app": "demo"},
+					},
 					Spec: corev1.ServiceSpec{
 						Ports: []corev1.ServicePort{
 							{Name: "http", NodePort: 30000},
@@ -161,8 +166,7 @@ func TestResolveServiceNodePort(t *testing.T) {
 					},
 				},
 			},
-			ns:       "my-ns",
-			svcName:  "my-svc",
+			labels:   map[string]string{"app": "demo"},
 			portName: "missing",
 			wantErr:  true,
 		},
@@ -170,7 +174,11 @@ func TestResolveServiceNodePort(t *testing.T) {
 			name: "nodeport is zero",
 			objects: []metav1.Object{
 				&corev1.Service{
-					ObjectMeta: metav1.ObjectMeta{Name: "my-svc", Namespace: "my-ns"},
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "my-svc",
+						Namespace: "my-ns",
+						Labels:    map[string]string{"app": "demo"},
+					},
 					Spec: corev1.ServiceSpec{
 						Ports: []corev1.ServicePort{
 							{Name: "http", NodePort: 0},
@@ -178,8 +186,7 @@ func TestResolveServiceNodePort(t *testing.T) {
 					},
 				},
 			},
-			ns:       "my-ns",
-			svcName:  "my-svc",
+			labels:   map[string]string{"app": "demo"},
 			portName: "http",
 			wantErr:  true,
 		},
@@ -193,7 +200,7 @@ func TestResolveServiceNodePort(t *testing.T) {
 			}
 			c := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(objs...).Build()
 
-			got, err := resolveServiceNodePort(context.Background(), c, tt.ns, tt.svcName, tt.portName)
+			got, err := resolveServiceNodePort(context.Background(), c, tt.labels, tt.portName)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("resolveServiceNodePort() error = %v, wantErr %v", err, tt.wantErr)
 				return
