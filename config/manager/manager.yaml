@@ -49,6 +49,47 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
+<<<<<<< HEAD
+      - command:
+        - /manager
+        args:
+          - --leader-elect
+          - --health-probe-bind-address=:8081
+        image: controller:latest
+        name: manager
+        ports:
+        - containerPort: 8081
+          name: health
+          protocol: TCP
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - "ALL"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        # TODO(user): Configure the resources accordingly based on the project requirements.
+        # More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+        resources:
+          limits:
+            cpu: 500m
+            memory: 128Mi
+          requests:
+            cpu: 10m
+            memory: 64Mi
+        volumeMounts: []
+=======
         - command:
             - /manager
           args:
@@ -95,6 +136,7 @@ spec:
               cpu: 10m
               memory: 64Mi
           volumeMounts: []
+>>>>>>> tmp-original-05-05-26-01-28
       volumes: []
       serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 10
