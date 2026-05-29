@@ -54,7 +54,6 @@ spec:
           args:
             - --leader-elect
             - --health-probe-bind-address=:8081
-            - --max-workspaces-per-user=3
           image: controller:latest
           name: manager
           env:

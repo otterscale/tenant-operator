@@ -78,7 +78,6 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
-	var maxWorkspacesPerUser int
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -97,8 +96,6 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
-	flag.IntVar(&maxWorkspacesPerUser, "max-workspaces-per-user", 3,
-		"Maximum number of workspaces a regular user may administer. 0 disables quota enforcement.")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -245,7 +242,7 @@ func main() {
 		podServiceAccount := cmp.Or(os.Getenv("POD_SERVICE_ACCOUNT"), operatorServiceAccount)
 		operatorSA := workspace.OperatorServiceAccountIdentity(podNamespace, podServiceAccount)
 
-		if err := webhookv1alpha1.SetupWorkspaceWebhookWithManager(mgr, operatorSA, maxWorkspacesPerUser); err != nil {
+		if err := webhookv1alpha1.SetupWorkspaceWebhookWithManager(mgr, operatorSA); err != nil {
 			setupLog.Error(err, "Failed to create webhook", "webhook", "Workspace")
 			os.Exit(1)
 		}
