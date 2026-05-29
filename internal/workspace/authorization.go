@@ -45,27 +45,24 @@ var privilegedGroups = []string{"system:masters", "kubeadm:cluster-admins"}
 var privilegedClusterRoles = []string{"cluster-admin"}
 
 // AuthorizeCreation checks whether the requesting user is allowed to create a
-// Workspace. Non-privileged callers must list themselves as an admin member of the
-// new Workspace and must not exceed the per-user workspace quota.
-//
-// maxPerUser controls the maximum number of workspaces a regular user may
-// administer. A value of 0 disables quota enforcement.
+// Workspace. Non-privileged callers must list themselves as an admin member of
+// the new Workspace.
 //
 // Privileged callers (group, operator SA, or cluster-admin ClusterRole holders)
-// bypass both the self-admin requirement and the quota.
+// bypass the self-admin requirement.
 //
 // Allowed callers (checked cheapest-first):
 //   - Members of a privileged group (system:masters, kubeadm:cluster-admins)
 //   - The operator's own ServiceAccount (operatorSA)
-//   - A user who is listed as an "admin" member in the new workspace AND under quota
+//   - A user who is listed as an "admin" member in the new workspace
 //   - A user bound to a privileged ClusterRole (e.g. cluster-admin) via ClusterRoleBinding
-func AuthorizeCreation(ctx context.Context, reader client.Reader, userInfo authenticationv1.UserInfo, ws *tenantv1alpha1.Workspace, operatorSA string, maxPerUser int) error {
+func AuthorizeCreation(ctx context.Context, reader client.Reader, userInfo authenticationv1.UserInfo, ws *tenantv1alpha1.Workspace, operatorSA string) error {
 	if inPrivilegedGroup(userInfo) || userInfo.Username == operatorSA {
 		return nil
 	}
 
 	if isWorkspaceAdmin(userInfo.Username, ws) {
-		return enforceWorkspaceQuota(ctx, reader, userInfo.Username, maxPerUser)
+		return nil
 	}
 
 	// Not listed as admin — last resort: check for privileged ClusterRole.
@@ -78,38 +75,6 @@ func AuthorizeCreation(ctx context.Context, reader client.Reader, userInfo authe
 	}
 
 	return fmt.Errorf("workspace creator must be listed as a member with the 'admin' role")
-}
-
-// enforceWorkspaceQuota rejects the request if the user already administers
-// maxPerUser or more workspaces. A maxPerUser of 0 disables the check.
-//
-// The quota counts workspaces where the user is a member with the "admin" role,
-// using the user label index for an efficient initial filter followed by an
-// in-memory role check.
-func enforceWorkspaceQuota(ctx context.Context, reader client.Reader, username string, maxPerUser int) error {
-	if maxPerUser <= 0 {
-		return nil
-	}
-
-	var list tenantv1alpha1.WorkspaceList
-	if err := reader.List(ctx, &list, client.MatchingLabels{
-		UserLabelPrefix + username: "true",
-	}); err != nil {
-		return fmt.Errorf("failed to list user workspaces for quota check: %w", err)
-	}
-
-	adminCount := 0
-	for i := range list.Items {
-		if isWorkspaceAdmin(username, &list.Items[i]) {
-			adminCount++
-		}
-	}
-
-	if adminCount >= maxPerUser {
-		return fmt.Errorf("user %q has reached the maximum number of workspaces (%d)", username, maxPerUser)
-	}
-
-	return nil
 }
 
 // AuthorizeModification checks whether the requesting user is allowed to

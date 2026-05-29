@@ -18,7 +18,6 @@ package workspace_test
 
 import (
 	"context"
-	"fmt"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -108,7 +107,7 @@ var _ = Describe("AuthorizeCreation", func() {
 
 		DescribeTable("should allow or deny based on caller identity",
 			func(user authenticationv1.UserInfo, shouldSucceed bool) {
-				err := workspace.AuthorizeCreation(ctx, reader, user, ws, testOperatorSA, 0)
+				err := workspace.AuthorizeCreation(ctx, reader, user, ws, testOperatorSA)
 				if shouldSucceed {
 					Expect(err).NotTo(HaveOccurred())
 				} else {
@@ -132,110 +131,6 @@ var _ = Describe("AuthorizeCreation", func() {
 		)
 	})
 
-	Context("quota enforcement", func() {
-		var alice authenticationv1.UserInfo
-
-		BeforeEach(func() {
-			ctx = context.Background()
-			existingWorkspaces := make([]runtime.Object, 3)
-			for i := range existingWorkspaces {
-				existingWorkspaces[i] = newWorkspaceWithName(
-					fmt.Sprintf("ws-%d", i),
-					fmt.Sprintf("ns-%d", i),
-					[]tenantv1alpha1.WorkspaceMember{
-						{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
-					},
-				)
-			}
-			reader = newFakeReader(existingWorkspaces...)
-			ws = newWorkspace([]tenantv1alpha1.WorkspaceMember{
-				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
-			})
-			alice = authenticationv1.UserInfo{Username: "alice"}
-		})
-
-		DescribeTable("should enforce per-user workspace quota",
-			func(maxPerUser int, shouldSucceed bool) {
-				err := workspace.AuthorizeCreation(ctx, reader, alice, ws, testOperatorSA, maxPerUser)
-				if shouldSucceed {
-					Expect(err).NotTo(HaveOccurred())
-				} else {
-					Expect(err).To(HaveOccurred())
-				}
-			},
-			Entry("quota disabled (0) allows creation", 0, true),
-			Entry("under quota allows creation", 5, true),
-			Entry("at quota denies creation", 3, false),
-			Entry("over quota denies creation", 2, false),
-		)
-	})
-
-	Context("quota counts only admin role", func() {
-		BeforeEach(func() {
-			ctx = context.Background()
-			reader = newFakeReader(
-				newWorkspaceWithName("ws-admin", "ns-admin", []tenantv1alpha1.WorkspaceMember{
-					{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
-				}),
-				newWorkspaceWithName("ws-edit", "ns-edit", []tenantv1alpha1.WorkspaceMember{
-					{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "bob"},
-					{Role: tenantv1alpha1.MemberRoleEdit, Subject: "alice"},
-				}),
-				newWorkspaceWithName("ws-view", "ns-view", []tenantv1alpha1.WorkspaceMember{
-					{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "bob"},
-					{Role: tenantv1alpha1.MemberRoleView, Subject: "alice"},
-				}),
-			)
-			ws = newWorkspace([]tenantv1alpha1.WorkspaceMember{
-				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
-			})
-		})
-
-		It("should allow when admin count is below quota", func() {
-			err := workspace.AuthorizeCreation(ctx, reader, authenticationv1.UserInfo{Username: "alice"}, ws, testOperatorSA, 2)
-			Expect(err).NotTo(HaveOccurred())
-		})
-
-		It("should deny when admin count meets quota", func() {
-			err := workspace.AuthorizeCreation(ctx, reader, authenticationv1.UserInfo{Username: "alice"}, ws, testOperatorSA, 1)
-			Expect(err).To(HaveOccurred())
-		})
-	})
-
-	Context("privileged caller bypasses quota", func() {
-		BeforeEach(func() {
-			ctx = context.Background()
-			existingWorkspaces := make([]runtime.Object, 5)
-			for i := range existingWorkspaces {
-				existingWorkspaces[i] = newWorkspaceWithName(
-					fmt.Sprintf("ws-%d", i),
-					fmt.Sprintf("ns-%d", i),
-					[]tenantv1alpha1.WorkspaceMember{
-						{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "admin-user"},
-					},
-				)
-			}
-			reader = newFakeReader(existingWorkspaces...)
-			ws = newWorkspace([]tenantv1alpha1.WorkspaceMember{
-				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "admin-user"},
-			})
-		})
-
-		It("should bypass quota for privileged group", func() {
-			err := workspace.AuthorizeCreation(ctx, reader, authenticationv1.UserInfo{
-				Username: "admin-user",
-				Groups:   []string{"system:masters"},
-			}, ws, testOperatorSA, 1)
-			Expect(err).NotTo(HaveOccurred())
-		})
-
-		It("should bypass quota for operator SA", func() {
-			err := workspace.AuthorizeCreation(ctx, reader, authenticationv1.UserInfo{
-				Username: testOperatorSA,
-			}, ws, testOperatorSA, 1)
-			Expect(err).NotTo(HaveOccurred())
-		})
-	})
 })
 
 // ---------------------------------------------------------------------------
