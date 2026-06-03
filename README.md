@@ -6,3 +6,8 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/otterscale/tenant-operator)](https://goreportcard.com/report/github.com/otterscale/tenant-operator)
 [![Release](https://img.shields.io/github/v/release/otterscale/tenant-operator)](https://github.com/otterscale/tenant-operator/releases/latest)
 [![License](https://img.shields.io/github/license/otterscale/tenant-operator)](LICENSE)
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fotterscale%2Ftenant-operator.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fotterscale%2Ftenant-operator?ref=badge_shield)
+
+
+## License
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fotterscale%2Ftenant-operator.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fotterscale%2Ftenant-operator?ref=badge_large)
