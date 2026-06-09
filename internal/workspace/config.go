@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -40,7 +41,8 @@ const (
 	globalConfigNamespace = "otterscale-system"
 	globalConfigName      = "global-workspace-config"
 
-	portName = "http-80"
+	cephPortName  = "http-rook-ceph"
+	modelPortName = "http-kserve"
 )
 
 var (
@@ -70,7 +72,7 @@ func ReconcileConfig(ctx context.Context, c client.Client, scheme *runtime.Schem
 	case err != nil:
 		return err
 	default:
-		modelNodePort, err := resolveServiceNodePort(ctx, c, modelGatewayLabels, portName)
+		modelNodePort, err := resolveServiceNodePort(ctx, c, modelGatewayLabels, modelPortName)
 		switch {
 		case apierrors.IsNotFound(err):
 			logger.Info("Model gateway service not found, skipping ModelGatewayEndpoint",
@@ -81,7 +83,7 @@ func ReconcileConfig(ctx context.Context, c client.Client, scheme *runtime.Schem
 			data["ModelGatewayEndpoint"] = fmt.Sprintf("%s:%d", clusterIP, modelNodePort)
 		}
 
-		objectNodePort, err := resolveServiceNodePort(ctx, c, objectGatewayLabels, portName)
+		objectNodePort, err := resolveServiceNodePort(ctx, c, objectGatewayLabels, cephPortName)
 		switch {
 		case apierrors.IsNotFound(err):
 			logger.Info("Object gateway service not found, skipping ObjectGatewayEndpoint",
@@ -141,9 +143,27 @@ type kubeadmClusterConfig struct {
 
 // resolveClusterIP reads the kubeadm-config ConfigMap from kube-system and extracts
 // the control plane IP from the controlPlaneEndpoint field.
-//
-// TODO: RKE2 support — kubeadm-config may not exist on RKE2 clusters, need fallback.
+// resolveClusterIP returns the control-plane IP/hostname.
+// Resolution order:
+//  1. kubeadm-config ConfigMap  (kubeadm / RKE1 clusters)
+//  2. kube-apiserver static pod (RKE2 clusters — token-server-address)
 func resolveClusterIP(ctx context.Context, c client.Client) (string, error) {
+	// ── 1. kubeadm path ────────────────────────────────────────────────────────
+	if host, err := resolveFromKubeadmConfig(ctx, c); err == nil {
+		return host, nil
+	}
+
+	// ── 2. RKE2: kube-apiserver static pod ────────────────────────────────────
+	if host, err := resolveFromKubeAPIServerPod(ctx, c); err == nil {
+		return host, nil
+	}
+
+	return "", fmt.Errorf("unable to resolve cluster control-plane IP: " +
+		"no kubeadm-config, no rke2-config, and no control-plane node found")
+}
+
+// resolveFromKubeadmConfig reads the kubeadm ClusterConfiguration ConfigMap.
+func resolveFromKubeadmConfig(ctx context.Context, c client.Client) (string, error) {
 	var cm corev1.ConfigMap
 	if err := c.Get(ctx, types.NamespacedName{Name: "kubeadm-config", Namespace: "kube-system"}, &cm); err != nil {
 		return "", err
@@ -169,6 +189,42 @@ func resolveClusterIP(ctx context.Context, c client.Client) (string, error) {
 		return cfg.ControlPlaneEndpoint, nil
 	}
 	return host, nil
+}
+
+// resolveFromKubeAPIServerPod finds the kube-apiserver static pod that RKE2
+// runs in kube-system and extracts --advertise-address from its command args.
+//
+// RKE2 names the pod "kube-apiserver-<nodeName>" with the label:
+//
+//	component=kube-apiserver
+func resolveFromKubeAPIServerPod(ctx context.Context, c client.Client) (string, error) {
+	var podList corev1.PodList
+	if err := c.List(ctx, &podList,
+		client.InNamespace("kube-system"),
+		client.MatchingLabels{"component": "kube-apiserver"},
+	); err != nil {
+		return "", fmt.Errorf("failed to list kube-apiserver pods: %w", err)
+	}
+
+	if len(podList.Items) == 0 {
+		return "", fmt.Errorf("no kube-apiserver pods found in kube-system")
+	}
+
+	// Iterate all containers (there is normally exactly one) and scan args.
+	for _, pod := range podList.Items {
+		for _, container := range pod.Spec.Containers {
+			for _, arg := range container.Args {
+				if strings.HasPrefix(arg, "--advertise-address=") {
+					val := strings.TrimPrefix(arg, "--advertise-address=")
+					if val != "" {
+						return val, nil
+					}
+				}
+			}
+		}
+	}
+
+	return "", fmt.Errorf("kube-apiserver pod found but --advertise-address not present in command args")
 }
 
 // resolveServiceNodePort finds a Service matching the given labels and returns
