@@ -66,12 +66,10 @@ func ReconcileConfig(ctx context.Context, c client.Client, scheme *runtime.Schem
 	data := make(map[string]string)
 
 	clusterIP, err := resolveClusterIP(ctx, c)
-	switch {
-	case apierrors.IsNotFound(err):
-		logger.Info("kubeadm-config not found, skipping service-based endpoint discovery")
-	case err != nil:
-		return err
-	default:
+	if err != nil {
+		logger.Info("Unable to resolve cluster control-plane IP, skipping service-based endpoint discovery",
+			"reason", err.Error())
+	} else {
 		modelNodePort, err := resolveServiceNodePort(ctx, c, modelGatewayLabels, modelPortName)
 		switch {
 		case apierrors.IsNotFound(err):
@@ -159,7 +157,7 @@ func resolveClusterIP(ctx context.Context, c client.Client) (string, error) {
 	}
 
 	return "", fmt.Errorf("unable to resolve cluster control-plane IP: " +
-		"no kubeadm-config, no rke2-config, and no control-plane node found")
+		"no kubeadm-config, and no kube-apiserver static pod found")
 }
 
 // resolveFromKubeadmConfig reads the kubeadm ClusterConfiguration ConfigMap.
@@ -214,11 +212,8 @@ func resolveFromKubeAPIServerPod(ctx context.Context, c client.Client) (string, 
 	for _, pod := range podList.Items {
 		for _, container := range pod.Spec.Containers {
 			for _, arg := range container.Args {
-				if strings.HasPrefix(arg, "--advertise-address=") {
-					val := strings.TrimPrefix(arg, "--advertise-address=")
-					if val != "" {
-						return val, nil
-					}
+				if val, ok := strings.CutPrefix(arg, "--advertise-address="); ok && val != "" {
+					return val, nil
 				}
 			}
 		}
