@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/fluxcd/pkg/apis/meta v1.28.0
 	github.com/fluxcd/source-controller/api v1.8.5
-	github.com/onsi/ginkgo/v2 v2.29.0
+	github.com/onsi/ginkgo/v2 v2.30.0
 	github.com/onsi/gomega v1.41.0
 	github.com/otterscale/api v1.2.0
 	k8s.io/api v0.36.1
