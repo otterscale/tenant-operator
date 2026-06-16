@@ -42,6 +42,9 @@ Contributions are welcome. A contribution guide (`CONTRIBUTING.md`) will follow;
 
 ## License
 
+<<<<<<< HEAD
+=======
 This project is licensed under the [Apache License 2.0](LICENSE).
 
 [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fotterscale%2Ftenant-operator.svg?type=large&issueType=license)](https://app.fossa.com/projects/git%2Bgithub.com%2Fotterscale%2Ftenant-operator?ref=badge_large&issueType=license)
+>>>>>>> tmp-original-16-06-26-02-32

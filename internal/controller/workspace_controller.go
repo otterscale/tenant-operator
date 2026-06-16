@@ -1,3 +1,5 @@
+<<<<<<< HEAD
+=======
 /*
 Copyright 2026 The OtterScale Authors.
 
@@ -14,6 +16,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+>>>>>>> tmp-original-16-06-26-02-32
 package controller
 
 import (
@@ -86,12 +89,17 @@ const missingHarborMembersRequeue = 5 * time.Minute
 // It implements the level-triggered reconciliation logic with a thin orchestration pattern:
 // Fetch -> Domain Sync -> Status Update.
 //
+<<<<<<< HEAD
+// For more details, check Reconcile and its Result here:
+// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.24.1/pkg/reconcile
+=======
 // Member-to-label synchronization is handled by the Mutating Webhook (WorkspaceCustomDefaulter),
 // ensuring labels are always consistent before the object reaches etcd.
 //
 // Deletion is handled entirely by Kubernetes garbage collection: all child resources
 // are created with OwnerReferences pointing to the Workspace, so they are automatically
 // cascade-deleted when the Workspace is removed. No finalizer is needed.
+>>>>>>> tmp-original-16-06-26-02-32
 func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithName(req.Name)
 	ctx = log.IntoContext(ctx, logger)
