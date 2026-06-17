@@ -37,8 +37,9 @@ import (
 // without blocking them.
 func podSecurityLabels() map[string]string {
 	return map[string]string{
-		"pod-security.kubernetes.io/warn":  "restricted",
-		"pod-security.kubernetes.io/audit": "restricted",
+		"pod-security.kubernetes.io/enforce": "baseline",
+		"pod-security.kubernetes.io/warn":    "restricted",
+		"pod-security.kubernetes.io/audit":   "restricted",
 	}
 }
 
