@@ -258,14 +258,12 @@ func (r *WorkspaceReconciler) findWorkspacesForGatewayService(ctx context.Contex
 
 func gatewayServiceChangedPredicate() predicate.Funcs {
 	isGatewayService := func(obj client.Object) bool {
-		svc, ok := obj.(*corev1.Service)
-		if !ok {
+		if obj == nil {
 			return false
 		}
-		labels := svc.GetLabels()
-		// Adjust the key/value (or matching logic) to whatever actually
-		// identifies a gateway-managed service in your cluster.
-		return labels[gatewayServiceLabelKey] == gatewayServiceLabelValue
+		svcLabels := labels.Set(obj.GetLabels())
+		return labels.Set(workspace.ModelGatewayLabels).AsSelector().Matches(svcLabels) ||
+			labels.Set(workspace.ObjectGatewayLabels).AsSelector().Matches(svcLabels)
 	}
 
 	return predicate.Funcs{
