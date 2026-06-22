@@ -257,23 +257,44 @@ func (r *WorkspaceReconciler) findWorkspacesForGatewayService(ctx context.Contex
 }
 
 func gatewayServiceChangedPredicate() predicate.Funcs {
+	isGatewayService := func(obj client.Object) bool {
+		svc, ok := obj.(*corev1.Service)
+		if !ok {
+			return false
+		}
+		labels := svc.GetLabels()
+		// Adjust the key/value (or matching logic) to whatever actually
+		// identifies a gateway-managed service in your cluster.
+		return labels[gatewayServiceLabelKey] == gatewayServiceLabelValue
+	}
+
 	return predicate.Funcs{
 		CreateFunc: func(e event.CreateEvent) bool {
-			return true
+			return isGatewayService(e.Object)
 		},
 		DeleteFunc: func(e event.DeleteEvent) bool {
-			return true
+			return isGatewayService(e.Object)
 		},
 		UpdateFunc: func(e event.UpdateEvent) bool {
 			oldSvc, ok1 := e.ObjectOld.(*corev1.Service)
 			newSvc, ok2 := e.ObjectNew.(*corev1.Service)
 			if !ok1 || !ok2 {
+				return false
+			}
+			oldIsGateway := isGatewayService(oldSvc)
+			newIsGateway := isGatewayService(newSvc)
+			if !oldIsGateway && !newIsGateway {
+				return false
+			}
+			// Label was added/removed (gateway-ness changed) or ports changed
+			// while it's a gateway service.
+			if oldIsGateway != newIsGateway {
 				return true
 			}
 			return !reflect.DeepEqual(oldSvc.Spec.Ports, newSvc.Spec.Ports)
 		},
 		GenericFunc: func(e event.GenericEvent) bool {
-			return true
+			return isGatewayService(e.Object)
 		},
 	}
 }
