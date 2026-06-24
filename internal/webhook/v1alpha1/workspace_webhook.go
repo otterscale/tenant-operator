@@ -141,6 +141,10 @@ func (v *WorkspaceCustomValidator) ValidateCreate(ctx context.Context, ws *tenan
 		return nil, fmt.Errorf("unable to retrieve admission request from context: %w", err)
 	}
 
+	if err := workspace.ValidateWorkspaceName(ws.Name); err != nil {
+		return nil, err
+	}
+
 	if err := workspace.ValidateNamespaceUniqueness(ctx, v.Reader, ws); err != nil {
 		return nil, err
 	}
