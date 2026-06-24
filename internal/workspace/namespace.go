@@ -71,6 +71,9 @@ func ReconcileNamespace(ctx context.Context, c client.Client, scheme *runtime.Sc
 			namespace.Labels = map[string]string{}
 		}
 
+		// Preserve labels declared on the Workspace itself
+		maps.Copy(namespace.Labels, w.Labels)
+
 		maps.Copy(namespace.Labels, LabelsForWorkspace(w.Name, version))
 		maps.Copy(namespace.Labels, podSecurityLabels())
 
