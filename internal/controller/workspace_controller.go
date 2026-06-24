@@ -230,13 +230,20 @@ func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func (r *WorkspaceReconciler) findWorkspacesForGatewayService(ctx context.Context, obj client.Object) []reconcile.Request {
+// isGatewayService reports whether obj carries the labels of the model
+// gateway or object gateway Service. Used both to filter watch events and
+// to map a Service event to the Workspaces that depend on it.
+func isGatewayService(obj client.Object) bool {
+	if obj == nil {
+		return false
+	}
 	svcLabels := labels.Set(obj.GetLabels())
-
-	isGatewayService := labels.Set(workspace.ModelGatewayLabels).AsSelector().Matches(svcLabels) ||
+	return labels.Set(workspace.ModelGatewayLabels).AsSelector().Matches(svcLabels) ||
 		labels.Set(workspace.ObjectGatewayLabels).AsSelector().Matches(svcLabels)
+}
 
-	if !isGatewayService {
+func (r *WorkspaceReconciler) findWorkspacesForGatewayService(ctx context.Context, obj client.Object) []reconcile.Request {
+	if !isGatewayService(obj) {
 		return nil
 	}
 
@@ -257,15 +264,6 @@ func (r *WorkspaceReconciler) findWorkspacesForGatewayService(ctx context.Contex
 }
 
 func gatewayServiceChangedPredicate() predicate.Funcs {
-	isGatewayService := func(obj client.Object) bool {
-		if obj == nil {
-			return false
-		}
-		svcLabels := labels.Set(obj.GetLabels())
-		return labels.Set(workspace.ModelGatewayLabels).AsSelector().Matches(svcLabels) ||
-			labels.Set(workspace.ObjectGatewayLabels).AsSelector().Matches(svcLabels)
-	}
-
 	return predicate.Funcs{
 		CreateFunc: func(e event.CreateEvent) bool {
 			return isGatewayService(e.Object)
