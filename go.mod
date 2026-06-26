@@ -7,7 +7,7 @@ require (
 	github.com/fluxcd/source-controller/api v1.8.5
 	github.com/onsi/ginkgo/v2 v2.29.0
 	github.com/onsi/gomega v1.41.0
-	github.com/otterscale/api v1.2.0
+	github.com/otterscale/api v1.2.1
 	k8s.io/api v0.36.1
 	k8s.io/apimachinery v0.36.1
 	k8s.io/client-go v0.36.1
