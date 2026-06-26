@@ -21,18 +21,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -215,8 +221,78 @@ func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&rbacv1.RoleBinding{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&sourcev1.HelmRepository{}).
+		Watches(
+			&corev1.Service{},
+			handler.EnqueueRequestsFromMapFunc(r.findWorkspacesForGatewayService),
+			builder.WithPredicates(gatewayServiceChangedPredicate()),
+		).
 		Named("workspace").
 		Complete(r)
+}
+
+// isGatewayService reports whether obj carries the labels of the model
+// gateway or object gateway Service. Used both to filter watch events and
+// to map a Service event to the Workspaces that depend on it.
+func isGatewayService(obj client.Object) bool {
+	if obj == nil {
+		return false
+	}
+	svcLabels := labels.Set(obj.GetLabels())
+	return labels.Set(workspace.ModelGatewayLabels).AsSelector().Matches(svcLabels) ||
+		labels.Set(workspace.ObjectGatewayLabels).AsSelector().Matches(svcLabels)
+}
+
+func (r *WorkspaceReconciler) findWorkspacesForGatewayService(ctx context.Context, obj client.Object) []reconcile.Request {
+	if !isGatewayService(obj) {
+		return nil
+	}
+
+	var wsList tenantv1alpha1.WorkspaceList
+	if err := r.List(ctx, &wsList); err != nil {
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0, len(wsList.Items))
+	for _, ws := range wsList.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name: ws.Name,
+			},
+		})
+	}
+	return requests
+}
+
+func gatewayServiceChangedPredicate() predicate.Funcs {
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool {
+			return isGatewayService(e.Object)
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return isGatewayService(e.Object)
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldSvc, ok1 := e.ObjectOld.(*corev1.Service)
+			newSvc, ok2 := e.ObjectNew.(*corev1.Service)
+			if !ok1 || !ok2 {
+				return false
+			}
+			oldIsGateway := isGatewayService(oldSvc)
+			newIsGateway := isGatewayService(newSvc)
+			if !oldIsGateway && !newIsGateway {
+				return false
+			}
+			// Label was added/removed (gateway-ness changed) or ports changed
+			// while it's a gateway service.
+			if oldIsGateway != newIsGateway {
+				return true
+			}
+			return !reflect.DeepEqual(oldSvc.Spec.Ports, newSvc.Spec.Ports)
+		},
+		GenericFunc: func(e event.GenericEvent) bool {
+			return isGatewayService(e.Object)
+		},
+	}
 }
 
 // updateStatus calculates the status based on the current observed state and patches the resource.

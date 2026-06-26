@@ -46,11 +46,11 @@ const (
 )
 
 var (
-	modelGatewayLabels = map[string]string{
+	ModelGatewayLabels = map[string]string{
 		"gateway.envoyproxy.io/owning-gateway-name":      "kserve-ingress-gateway",
 		"gateway.envoyproxy.io/owning-gateway-namespace": "kserve",
 	}
-	objectGatewayLabels = map[string]string{
+	ObjectGatewayLabels = map[string]string{
 		"gateway.envoyproxy.io/owning-gateway-name":      "rook-ceph-ingress-gateway",
 		"gateway.envoyproxy.io/owning-gateway-namespace": "rook-ceph",
 	}
@@ -70,22 +70,22 @@ func ReconcileConfig(ctx context.Context, c client.Client, scheme *runtime.Schem
 		logger.Info("Unable to resolve cluster control-plane IP, skipping service-based endpoint discovery",
 			"reason", err.Error())
 	} else {
-		modelNodePort, err := resolveServiceNodePort(ctx, c, modelGatewayLabels, modelPortName)
+		modelNodePort, err := resolveServiceNodePort(ctx, c, ModelGatewayLabels, modelPortName)
 		switch {
 		case apierrors.IsNotFound(err):
 			logger.Info("Model gateway service not found, skipping ModelGatewayEndpoint",
-				"labels", modelGatewayLabels)
+				"labels", ModelGatewayLabels)
 		case err != nil:
 			return err
 		default:
 			data["ModelGatewayEndpoint"] = fmt.Sprintf("%s:%d", clusterIP, modelNodePort)
 		}
 
-		objectNodePort, err := resolveServiceNodePort(ctx, c, objectGatewayLabels, cephPortName)
+		objectNodePort, err := resolveServiceNodePort(ctx, c, ObjectGatewayLabels, cephPortName)
 		switch {
 		case apierrors.IsNotFound(err):
 			logger.Info("Object gateway service not found, skipping ObjectGatewayEndpoint",
-				"labels", objectGatewayLabels)
+				"labels", ObjectGatewayLabels)
 		case err != nil:
 			return err
 		default:
