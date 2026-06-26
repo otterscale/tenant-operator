@@ -18,12 +18,15 @@ package workspace_test
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/validate/content"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -332,5 +335,27 @@ var _ = Describe("ValidateNamespaceUniqueness", func() {
 
 		err := workspace.ValidateNamespaceUniqueness(ctx, reader, ws)
 		Expect(err).NotTo(HaveOccurred())
+	})
+})
+
+// ---------------------------------------------------------------------------
+// ValidateWorkspaceName
+// ---------------------------------------------------------------------------
+
+var _ = Describe("ValidateWorkspaceName", func() {
+	It("should allow a name shorter than the label value limit", func() {
+		err := workspace.ValidateWorkspaceName(strings.Repeat("a", content.LabelValueMaxLength-1))
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("should allow a name at the label value limit", func() {
+		err := workspace.ValidateWorkspaceName(strings.Repeat("a", content.LabelValueMaxLength))
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("should deny a name longer than the label value limit", func() {
+		err := workspace.ValidateWorkspaceName(strings.Repeat("a", content.LabelValueMaxLength+1))
+		Expect(err).To(MatchError(fmt.Sprintf(
+			"workspace metadata.name must be no more than %d bytes", content.LabelValueMaxLength)))
 	})
 })
