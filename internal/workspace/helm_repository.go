@@ -33,6 +33,8 @@ import (
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
 )
 
+const labelValueTrue = "true"
+
 // ReconcileHelmRepository ensures a FluxCD HelmRepository (type: oci) exists
 // in the workspace namespace, pointing to the Harbor OCI registry for the workspace project.
 func ReconcileHelmRepository(ctx context.Context, c client.Client, scheme *runtime.Scheme, w *tenantv1alpha1.Workspace, version string, harborURL string) error {
@@ -50,8 +52,8 @@ func ReconcileHelmRepository(ctx context.Context, c client.Client, scheme *runti
 
 	op, err := ctrlutil.CreateOrUpdate(ctx, c, repo, func() error {
 		labels := LabelsForWorkspace(w.Name, version)
-		labels[LabelFromHarbor] = "true"
-		labels[LabelInternal] = "true"
+		labels[LabelFromHarbor] = labelValueTrue
+		labels[LabelInternal] = labelValueTrue
 		repo.Labels = labels
 
 		repo.Spec = sourcev1.HelmRepositorySpec{
