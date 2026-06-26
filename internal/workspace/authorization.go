@@ -23,6 +23,7 @@ import (
 
 	authenticationv1 "k8s.io/api/authentication/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/validate/content"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
@@ -172,6 +173,14 @@ func ValidateNamespaceUniqueness(ctx context.Context, reader client.Reader, ws *
 		if existing.Name != ws.Name && existing.Spec.Namespace == ws.Spec.Namespace {
 			return fmt.Errorf("namespace %q is already used by workspace %q", ws.Spec.Namespace, existing.Name)
 		}
+	}
+	return nil
+}
+
+// ValidateWorkspaceName ensures the name can be used as a Kubernetes label value.
+func ValidateWorkspaceName(name string) error {
+	if len(name) > content.LabelValueMaxLength {
+		return fmt.Errorf("workspace metadata.name must be no more than %d bytes", content.LabelValueMaxLength)
 	}
 	return nil
 }
