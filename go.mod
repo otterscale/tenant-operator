@@ -6,7 +6,7 @@ require (
 	github.com/fluxcd/pkg/apis/meta v1.31.0
 	github.com/fluxcd/source-controller/api v1.9.1
 	github.com/onsi/ginkgo/v2 v2.32.0
-	github.com/onsi/gomega v1.41.0
+	github.com/onsi/gomega v1.42.1
 	github.com/otterscale/api v1.3.0-rc.2
 	k8s.io/api v0.36.2
 	k8s.io/apimachinery v0.36.2
