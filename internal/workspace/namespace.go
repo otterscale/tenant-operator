@@ -31,7 +31,7 @@ import (
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
 )
 
-const licenseOperatorInjectLabelKey = "license.operator/inject"
+const licenseInjectLabelKey = "license.phison.com/inject"
 
 // podSecurityLabels returns the Pod Security admission labels applied to every
 // workspace namespace: enforce at baseline as a practical multi-tenant floor,
@@ -77,9 +77,9 @@ func ReconcileNamespace(ctx context.Context, c client.Client, scheme *runtime.Sc
 		maps.Copy(namespace.Labels, podSecurityLabels())
 
 		if w.Spec.LicenseInjection {
-			namespace.Labels[licenseOperatorInjectLabelKey] = "true"
+			namespace.Labels[licenseInjectLabelKey] = "true"
 		} else {
-			delete(namespace.Labels, licenseOperatorInjectLabelKey)
+			delete(namespace.Labels, licenseInjectLabelKey)
 		}
 
 		// Set OwnerReference to ensure garbage collection works
