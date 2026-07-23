@@ -51,8 +51,8 @@ func ReconcileHelmRepository(ctx context.Context, c client.Client, scheme *runti
 			internal:    true,
 		},
 		{
-			name:        DefaultHarborProjectName,
-			projectName: DefaultHarborProjectName,
+			name:        HarborDefaultProjectName,
+			projectName: HarborDefaultProjectName,
 		},
 	}
 

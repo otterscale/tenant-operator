@@ -31,7 +31,7 @@ const (
 	NetworkPolicyName        = "workspace-network-policy"
 	ImagePullSecretName      = "workspace-image-pull-secret"
 	HelmRepositoryName       = "workspace-helm-repository"
-	DefaultHarborProjectName = "library"
+	HarborDefaultProjectName = "library"
 
 	LabelFromHarbor = "tenant.otterscale.io/from-harbor"
 	LabelInternal   = "tenant.otterscale.io/internal"
