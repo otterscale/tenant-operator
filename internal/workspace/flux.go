@@ -21,6 +21,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -52,25 +53,11 @@ func ReconcileFluxRBAC(ctx context.Context, c client.Client, scheme *runtime.Sch
 	}
 	logReconciledFluxRBAC(ctx, op, "ServiceAccount", serviceAccount.Name)
 
-	role := &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      WorkspaceReconcilerName,
-			Namespace: w.Spec.Namespace,
-		},
+	desiredRoleRef := rbacv1.RoleRef{
+		APIGroup: rbacv1.GroupName,
+		Kind:     "ClusterRole",
+		Name:     string(tenantv1alpha1.MemberRoleEdit),
 	}
-	op, err = ctrlutil.CreateOrUpdate(ctx, c, role, func() error {
-		role.Labels = labels
-		role.Rules = []rbacv1.PolicyRule{{
-			APIGroups: []string{"*"},
-			Resources: []string{"*"},
-			Verbs:     []string{"*"},
-		}}
-		return ctrlutil.SetControllerReference(w, role, scheme)
-	})
-	if err != nil {
-		return err
-	}
-	logReconciledFluxRBAC(ctx, op, "Role", role.Name)
 
 	roleBinding := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
@@ -78,6 +65,22 @@ func ReconcileFluxRBAC(ctx context.Context, c client.Client, scheme *runtime.Sch
 			Namespace: w.Spec.Namespace,
 		},
 	}
+	switch err := c.Get(ctx, client.ObjectKeyFromObject(roleBinding), roleBinding); {
+	case err == nil && roleBinding.RoleRef != desiredRoleRef:
+		// roleRef is immutable, so an in-place update is rejected by the API server; recreate instead.
+		if err := c.Delete(ctx, roleBinding); err != nil {
+			return err
+		}
+		roleBinding = &rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      WorkspaceReconcilerName,
+				Namespace: w.Spec.Namespace,
+			},
+		}
+	case err != nil && !apierrors.IsNotFound(err):
+		return err
+	}
+
 	op, err = ctrlutil.CreateOrUpdate(ctx, c, roleBinding, func() error {
 		roleBinding.Labels = labels
 		roleBinding.Subjects = []rbacv1.Subject{{
@@ -85,11 +88,7 @@ func ReconcileFluxRBAC(ctx context.Context, c client.Client, scheme *runtime.Sch
 			Name:      WorkspaceReconcilerName,
 			Namespace: w.Spec.Namespace,
 		}}
-		roleBinding.RoleRef = rbacv1.RoleRef{
-			APIGroup: rbacv1.GroupName,
-			Kind:     "Role",
-			Name:     WorkspaceReconcilerName,
-		}
+		roleBinding.RoleRef = desiredRoleRef
 		return ctrlutil.SetControllerReference(w, roleBinding, scheme)
 	})
 	if err != nil {

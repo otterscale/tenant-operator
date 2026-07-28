@@ -136,20 +136,12 @@ var _ = Describe("Workspace Controller", func() {
 			fetchResource(&serviceAccount, ws.WorkspaceReconcilerName, namespaceName)
 			Expect(serviceAccount.OwnerReferences).NotTo(BeEmpty())
 
-			var role rbacv1.Role
-			fetchResource(&role, ws.WorkspaceReconcilerName, namespaceName)
-			Expect(role.Rules).To(ConsistOf(rbacv1.PolicyRule{
-				APIGroups: []string{"*"},
-				Resources: []string{"*"},
-				Verbs:     []string{"*"},
-			}))
-
 			var fluxBinding rbacv1.RoleBinding
 			fetchResource(&fluxBinding, ws.WorkspaceReconcilerName, namespaceName)
 			Expect(fluxBinding.RoleRef).To(Equal(rbacv1.RoleRef{
 				APIGroup: rbacv1.GroupName,
-				Kind:     "Role",
-				Name:     ws.WorkspaceReconcilerName,
+				Kind:     "ClusterRole",
+				Name:     string(tenantv1alpha1.MemberRoleEdit),
 			}))
 			Expect(fluxBinding.Subjects).To(ConsistOf(rbacv1.Subject{
 				Kind:      rbacv1.ServiceAccountKind,

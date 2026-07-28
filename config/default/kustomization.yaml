@@ -21,8 +21,6 @@ resources:
 # [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix including the one in
 # crd/kustomization.yaml
 - ../webhook
-# Enforce namespace-scoped execution for Workspace-owned Flux resources.
-- ../admission-policy
 # [CERTMANAGER] To enable cert-manager, uncomment all sections with 'CERTMANAGER'. 'WEBHOOK' components are required.
 - ../certmanager
 # [PROMETHEUS] To enable prometheus monitor, uncomment all sections with 'PROMETHEUS'.
@@ -55,11 +53,6 @@ patches:
 - path: manager_webhook_patch.yaml
   target:
     kind: Deployment
-
-# Kustomize does not yet recognize these admission types as cluster-scoped,
-# so remove the namespace added by the top-level namespace transformer.
-transformers:
-- remove_admission_policy_namespace.yaml
 
 # [CERTMANAGER] To enable cert-manager, uncomment all sections with 'CERTMANAGER' prefix.
 # Uncomment the following replacements to add the cert-manager CA injection annotations
