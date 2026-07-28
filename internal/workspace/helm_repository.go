@@ -35,44 +35,65 @@ import (
 
 const labelValueTrue = "true"
 
-// ReconcileHelmRepository ensures a FluxCD HelmRepository (type: oci) exists
-// in the workspace namespace, pointing to the Harbor OCI registry for the workspace project.
+// ReconcileHelmRepository ensures the workspace has FluxCD OCI sources for
+// both its private Harbor project and Harbor's default public project (library).
 func ReconcileHelmRepository(ctx context.Context, c client.Client, scheme *runtime.Scheme, w *tenantv1alpha1.Workspace, version string, harborURL string) error {
-	repoURL, insecure, err := buildHelmRepositoryURL(harborURL, w.Spec.Namespace)
-	if err != nil {
-		return fmt.Errorf("building HelmRepository URL: %w", err)
-	}
-
-	repo := &sourcev1.HelmRepository{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      HelmRepositoryName,
-			Namespace: w.Spec.Namespace,
+	sources := []struct {
+		name        string
+		projectName string
+		secretRef   *meta.LocalObjectReference
+		internal    bool
+	}{
+		{
+			name:        HelmRepositoryName,
+			projectName: w.Spec.Namespace,
+			secretRef:   &meta.LocalObjectReference{Name: ImagePullSecretName},
+			internal:    true,
+		},
+		{
+			name:        HarborDefaultProjectName,
+			projectName: HarborDefaultProjectName,
 		},
 	}
 
-	op, err := ctrlutil.CreateOrUpdate(ctx, c, repo, func() error {
-		labels := LabelsForWorkspace(w.Name, version)
-		labels[LabelFromHarbor] = labelValueTrue
-		labels[LabelInternal] = labelValueTrue
-		repo.Labels = labels
-
-		repo.Spec = sourcev1.HelmRepositorySpec{
-			SecretRef: &meta.LocalObjectReference{
-				Name: ImagePullSecretName,
-			},
-			Type:     sourcev1.HelmRepositoryTypeOCI,
-			URL:      repoURL,
-			Interval: metav1.Duration{Duration: 5 * time.Minute},
-			Insecure: insecure,
+	for _, source := range sources {
+		repoURL, insecure, err := buildHelmRepositoryURL(harborURL, source.projectName)
+		if err != nil {
+			return fmt.Errorf("building HelmRepository %q URL: %w", source.name, err)
 		}
-		return ctrlutil.SetControllerReference(w, repo, scheme)
-	})
-	if err != nil {
-		return err
+
+		repo := &sourcev1.HelmRepository{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      source.name,
+				Namespace: w.Spec.Namespace,
+			},
+		}
+
+		op, err := ctrlutil.CreateOrUpdate(ctx, c, repo, func() error {
+			labels := LabelsForWorkspace(w.Name, version)
+			labels[LabelFromHarbor] = labelValueTrue
+			if source.internal {
+				labels[LabelInternal] = labelValueTrue
+			}
+			repo.Labels = labels
+
+			repo.Spec = sourcev1.HelmRepositorySpec{
+				SecretRef: source.secretRef,
+				Type:      sourcev1.HelmRepositoryTypeOCI,
+				URL:       repoURL,
+				Interval:  metav1.Duration{Duration: 5 * time.Minute},
+				Insecure:  insecure,
+			}
+			return ctrlutil.SetControllerReference(w, repo, scheme)
+		})
+		if err != nil {
+			return fmt.Errorf("reconciling HelmRepository %q: %w", source.name, err)
+		}
+		if op != ctrlutil.OperationResultNone {
+			log.FromContext(ctx).Info("HelmRepository reconciled", "operation", op, "name", repo.Name)
+		}
 	}
-	if op != ctrlutil.OperationResultNone {
-		log.FromContext(ctx).Info("HelmRepository reconciled", "operation", op, "name", repo.Name)
-	}
+
 	return nil
 }
 

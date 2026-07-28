@@ -24,13 +24,14 @@ import (
 )
 
 const (
-	RoleBindingName     = "workspace-role-binding"
-	ResourceQuotaName   = "workspace-resource-quota"
-	LimitRangeName      = "workspace-limit-range"
-	ConfigName          = "workspace-config"
-	NetworkPolicyName   = "workspace-network-policy"
-	ImagePullSecretName = "workspace-image-pull-secret"
-	HelmRepositoryName  = "workspace-helm-repository"
+	RoleBindingName          = "workspace-role-binding"
+	ResourceQuotaName        = "workspace-resource-quota"
+	LimitRangeName           = "workspace-limit-range"
+	ConfigName               = "workspace-config"
+	NetworkPolicyName        = "workspace-network-policy"
+	ImagePullSecretName      = "workspace-image-pull-secret"
+	HelmRepositoryName       = "workspace-helm-repository"
+	HarborDefaultProjectName = "library"
 
 	LabelFromHarbor = "tenant.otterscale.io/from-harbor"
 	LabelInternal   = "tenant.otterscale.io/internal"
