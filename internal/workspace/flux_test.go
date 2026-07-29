@@ -85,7 +85,7 @@ func TestReconcileFluxRBAC(t *testing.T) {
 	if !reflect.DeepEqual(roleBinding.Subjects, wantSubjects) {
 		t.Errorf("RoleBinding subjects = %#v, want %#v", roleBinding.Subjects, wantSubjects)
 	}
-	if roleBinding.RoleRef.Kind != "ClusterRole" || roleBinding.RoleRef.Name != string(tenantv1alpha1.MemberRoleEdit) {
+	if roleBinding.RoleRef.Kind != clusterRoleKind || roleBinding.RoleRef.Name != string(tenantv1alpha1.MemberRoleEdit) {
 		t.Errorf("RoleBinding roleRef = %#v", roleBinding.RoleRef)
 	}
 
@@ -107,7 +107,7 @@ func TestReconcileFluxRBAC(t *testing.T) {
 	if !reflect.DeepEqual(roleBinding.Subjects, wantSubjects) {
 		t.Errorf("reconciled RoleBinding subjects = %#v, want %#v", roleBinding.Subjects, wantSubjects)
 	}
-	if roleBinding.RoleRef.Kind != "ClusterRole" || roleBinding.RoleRef.Name != string(tenantv1alpha1.MemberRoleEdit) {
+	if roleBinding.RoleRef.Kind != clusterRoleKind || roleBinding.RoleRef.Name != string(tenantv1alpha1.MemberRoleEdit) {
 		t.Errorf("reconciled RoleBinding roleRef = %#v", roleBinding.RoleRef)
 	}
 	if err := c.Get(ctx, key, serviceAccount); err != nil {
@@ -167,7 +167,7 @@ func TestReconcileFluxRBAC_RecreatesRoleBindingOnRoleRefChange(t *testing.T) {
 	if err := c.Get(ctx, key, roleBinding); err != nil {
 		t.Fatalf("get reconciled RoleBinding: %v", err)
 	}
-	if roleBinding.RoleRef.Kind != "ClusterRole" || roleBinding.RoleRef.Name != string(tenantv1alpha1.MemberRoleEdit) {
+	if roleBinding.RoleRef.Kind != clusterRoleKind || roleBinding.RoleRef.Name != string(tenantv1alpha1.MemberRoleEdit) {
 		t.Errorf("reconciled RoleBinding roleRef = %#v", roleBinding.RoleRef)
 	}
 	if roleBinding.UID == staleRoleBinding.UID {

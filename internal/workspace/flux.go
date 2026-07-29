@@ -31,7 +31,10 @@ import (
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
 )
 
-const WorkspaceReconcilerName = "workspace-reconciler"
+const (
+	WorkspaceReconcilerName = "workspace-reconciler"
+	clusterRoleKind         = "ClusterRole"
+)
 
 // ReconcileFluxRBAC ensures Flux reconciles Workspace workloads with
 // namespace-scoped permissions instead of the Flux controller identity.
@@ -55,7 +58,7 @@ func ReconcileFluxRBAC(ctx context.Context, c client.Client, scheme *runtime.Sch
 
 	desiredRoleRef := rbacv1.RoleRef{
 		APIGroup: rbacv1.GroupName,
-		Kind:     "ClusterRole",
+		Kind:     clusterRoleKind,
 		Name:     string(tenantv1alpha1.MemberRoleEdit),
 	}
 
