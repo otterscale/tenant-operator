@@ -131,6 +131,24 @@ var _ = Describe("Workspace Controller", func() {
 			fetchResource(&ns, namespaceName, "")
 			Expect(ns.Labels).To(HaveKeyWithValue("app.kubernetes.io/managed-by", "tenant-operator"))
 
+			By("Verifying the workspace reconciler ServiceAccount RBAC")
+			var serviceAccount corev1.ServiceAccount
+			fetchResource(&serviceAccount, ws.WorkspaceReconcilerName, namespaceName)
+			Expect(serviceAccount.OwnerReferences).NotTo(BeEmpty())
+
+			var reconcilerBinding rbacv1.RoleBinding
+			fetchResource(&reconcilerBinding, ws.WorkspaceReconcilerName, namespaceName)
+			Expect(reconcilerBinding.RoleRef).To(Equal(rbacv1.RoleRef{
+				APIGroup: rbacv1.GroupName,
+				Kind:     "ClusterRole",
+				Name:     string(tenantv1alpha1.MemberRoleAdmin),
+			}))
+			Expect(reconcilerBinding.Subjects).To(ConsistOf(rbacv1.Subject{
+				Kind:      rbacv1.ServiceAccountKind,
+				Name:      ws.WorkspaceReconcilerName,
+				Namespace: namespaceName,
+			}))
+
 			By("Verifying the Admin RoleBinding")
 			var rb rbacv1.RoleBinding
 			fetchResource(&rb, ws.RoleBindingName+"-admin", namespaceName)
