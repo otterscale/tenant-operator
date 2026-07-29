@@ -136,7 +136,7 @@ func (r *WorkspaceReconciler) reconcileResources(ctx context.Context, w *tenantv
 	if err := workspace.ReconcileNamespace(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
 		return nil, err
 	}
-	if err := workspace.ReconcileFluxRBAC(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
+	if err := workspace.ReconcileServiceAccount(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
 		return nil, err
 	}
 	var missingHarborMembers []string

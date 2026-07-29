@@ -21,7 +21,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -36,9 +35,10 @@ const (
 	clusterRoleKind         = "ClusterRole"
 )
 
-// ReconcileFluxRBAC ensures Flux reconciles Workspace workloads with
+// ReconcileServiceAccount ensures each Workspace namespace has a ServiceAccount
+// bound to the admin ClusterRole, so Flux reconciles Workspace workloads with
 // namespace-scoped permissions instead of the Flux controller identity.
-func ReconcileFluxRBAC(ctx context.Context, c client.Client, scheme *runtime.Scheme, w *tenantv1alpha1.Workspace, version string) error {
+func ReconcileServiceAccount(ctx context.Context, c client.Client, scheme *runtime.Scheme, w *tenantv1alpha1.Workspace, version string) error {
 	labels := LabelsForWorkspace(w.Name, version)
 
 	serviceAccount := &corev1.ServiceAccount{
@@ -54,13 +54,7 @@ func ReconcileFluxRBAC(ctx context.Context, c client.Client, scheme *runtime.Sch
 	if err != nil {
 		return err
 	}
-	logReconciledFluxRBAC(ctx, op, "ServiceAccount", serviceAccount.Name)
-
-	desiredRoleRef := rbacv1.RoleRef{
-		APIGroup: rbacv1.GroupName,
-		Kind:     clusterRoleKind,
-		Name:     string(tenantv1alpha1.MemberRoleEdit),
-	}
+	logReconciledServiceAccount(ctx, op, "ServiceAccount", serviceAccount.Name)
 
 	roleBinding := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
@@ -68,22 +62,6 @@ func ReconcileFluxRBAC(ctx context.Context, c client.Client, scheme *runtime.Sch
 			Namespace: w.Spec.Namespace,
 		},
 	}
-	switch err := c.Get(ctx, client.ObjectKeyFromObject(roleBinding), roleBinding); {
-	case err == nil && roleBinding.RoleRef != desiredRoleRef:
-		// roleRef is immutable, so an in-place update is rejected by the API server; recreate instead.
-		if err := c.Delete(ctx, roleBinding); err != nil {
-			return err
-		}
-		roleBinding = &rbacv1.RoleBinding{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      WorkspaceReconcilerName,
-				Namespace: w.Spec.Namespace,
-			},
-		}
-	case err != nil && !apierrors.IsNotFound(err):
-		return err
-	}
-
 	op, err = ctrlutil.CreateOrUpdate(ctx, c, roleBinding, func() error {
 		roleBinding.Labels = labels
 		roleBinding.Subjects = []rbacv1.Subject{{
@@ -91,18 +69,22 @@ func ReconcileFluxRBAC(ctx context.Context, c client.Client, scheme *runtime.Sch
 			Name:      WorkspaceReconcilerName,
 			Namespace: w.Spec.Namespace,
 		}}
-		roleBinding.RoleRef = desiredRoleRef
+		roleBinding.RoleRef = rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName,
+			Kind:     clusterRoleKind,
+			Name:     string(tenantv1alpha1.MemberRoleAdmin),
+		}
 		return ctrlutil.SetControllerReference(w, roleBinding, scheme)
 	})
 	if err != nil {
 		return err
 	}
-	logReconciledFluxRBAC(ctx, op, "RoleBinding", roleBinding.Name)
+	logReconciledServiceAccount(ctx, op, "RoleBinding", roleBinding.Name)
 
 	return nil
 }
 
-func logReconciledFluxRBAC(ctx context.Context, op ctrlutil.OperationResult, kind, name string) {
+func logReconciledServiceAccount(ctx context.Context, op ctrlutil.OperationResult, kind, name string) {
 	if op != ctrlutil.OperationResultNone {
 		log.FromContext(ctx).Info(kind+" reconciled", "operation", op, "name", name)
 	}

@@ -131,19 +131,19 @@ var _ = Describe("Workspace Controller", func() {
 			fetchResource(&ns, namespaceName, "")
 			Expect(ns.Labels).To(HaveKeyWithValue("app.kubernetes.io/managed-by", "tenant-operator"))
 
-			By("Verifying the Flux execution RBAC")
+			By("Verifying the workspace reconciler ServiceAccount RBAC")
 			var serviceAccount corev1.ServiceAccount
 			fetchResource(&serviceAccount, ws.WorkspaceReconcilerName, namespaceName)
 			Expect(serviceAccount.OwnerReferences).NotTo(BeEmpty())
 
-			var fluxBinding rbacv1.RoleBinding
-			fetchResource(&fluxBinding, ws.WorkspaceReconcilerName, namespaceName)
-			Expect(fluxBinding.RoleRef).To(Equal(rbacv1.RoleRef{
+			var reconcilerBinding rbacv1.RoleBinding
+			fetchResource(&reconcilerBinding, ws.WorkspaceReconcilerName, namespaceName)
+			Expect(reconcilerBinding.RoleRef).To(Equal(rbacv1.RoleRef{
 				APIGroup: rbacv1.GroupName,
 				Kind:     "ClusterRole",
-				Name:     string(tenantv1alpha1.MemberRoleEdit),
+				Name:     string(tenantv1alpha1.MemberRoleAdmin),
 			}))
-			Expect(fluxBinding.Subjects).To(ConsistOf(rbacv1.Subject{
+			Expect(reconcilerBinding.Subjects).To(ConsistOf(rbacv1.Subject{
 				Kind:      rbacv1.ServiceAccountKind,
 				Name:      ws.WorkspaceReconcilerName,
 				Namespace: namespaceName,
