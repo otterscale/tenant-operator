@@ -12,7 +12,6 @@ rules:
   - namespaces
   - resourcequotas
   - secrets
-  - serviceaccounts
   verbs:
   - create
   - delete
@@ -29,6 +28,17 @@ rules:
   verbs:
   - get
   - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - events.k8s.io
