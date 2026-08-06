@@ -53,12 +53,17 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 	"$(CONTROLLER_GEN)" object:headerFile="hack/boilerplate.go.txt" paths="./..."
 
 API_VERSION ?= $(call gomodver,github.com/otterscale/api)
+API_REPLACE_DIR ?= $(shell GOWORK=off go list -m -f '{{with .Replace}}{{.Dir}}{{end}}' github.com/otterscale/api 2>/dev/null)
 
 .PHONY: download-crds
-download-crds: ## Download CRDs from the API module release.
+download-crds: kustomize ## Download CRDs from the API module release or render a local replacement.
 	@mkdir -p config/crd/bases
-	curl -sSL -o config/crd/bases/crds.yaml \
-		https://github.com/otterscale/api/releases/download/$(API_VERSION)/crds.yaml
+	@if [ -n "$(API_REPLACE_DIR)" ]; then \
+		"$(KUSTOMIZE)" build "$(API_REPLACE_DIR)/config/default" > config/crd/bases/crds.yaml; \
+	else \
+		curl -fsSL -o config/crd/bases/crds.yaml \
+			https://github.com/otterscale/api/releases/download/$(API_VERSION)/crds.yaml; \
+	fi
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.
