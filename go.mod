@@ -7,7 +7,7 @@ require (
 	github.com/fluxcd/source-controller/api v1.9.3
 	github.com/onsi/ginkgo/v2 v2.32.0
 	github.com/onsi/gomega v1.42.1
-	github.com/otterscale/api v1.4.0
+	github.com/otterscale/api v1.4.1
 	k8s.io/api v0.36.3
 	k8s.io/apimachinery v0.36.3
 	k8s.io/client-go v0.36.3
@@ -109,5 +109,3 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
 )
-
-replace github.com/otterscale/api => ../api
