@@ -53,7 +53,6 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 	"$(CONTROLLER_GEN)" object:headerFile="hack/boilerplate.go.txt" paths="./..."
 
 API_VERSION ?= $(call gomodver,github.com/otterscale/api)
-API_REPLACE_DIR ?= $(shell GOWORK=off go list -m -f '{{with .Replace}}{{.Dir}}{{end}}' github.com/otterscale/api 2>/dev/null)
 
 .PHONY: download-crds
 download-crds: ## Download CRDs from the API module release.
