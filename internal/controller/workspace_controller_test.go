@@ -164,6 +164,34 @@ var _ = Describe("Workspace Controller", func() {
 		})
 	})
 
+	Context("Rancher Project", func() {
+		const rancherProjectID = "c-m-abcde:p-vwxyz"
+
+		BeforeEach(func() {
+			workspace = makeWorkspace(resourceName, namespaceName, func(w *tenantv1alpha1.Workspace) {
+				w.Spec.RancherProjectID = rancherProjectID
+			})
+		})
+
+		It("should persist the CRD field and reconcile the namespace annotation", func() {
+			fullyReconcile()
+
+			fetchResource(workspace, resourceName, "")
+			Expect(workspace.Spec.RancherProjectID).To(Equal(rancherProjectID))
+
+			var ns corev1.Namespace
+			fetchResource(&ns, namespaceName, "")
+			Expect(ns.Annotations).To(HaveKeyWithValue("field.cattle.io/projectId", rancherProjectID))
+
+			ns.Annotations["field.cattle.io/projectId"] = "local:p-wrong"
+			Expect(k8sClient.Update(ctx, &ns)).To(Succeed())
+			executeReconcile()
+
+			fetchResource(&ns, namespaceName, "")
+			Expect(ns.Annotations).To(HaveKeyWithValue("field.cattle.io/projectId", rancherProjectID))
+		})
+	})
+
 	Context("Namespace Conflict Handling", func() {
 		It("should set Ready=False with NamespaceConflict when namespace already exists", func() {
 			By("Creating an existing namespace not owned by the workspace")

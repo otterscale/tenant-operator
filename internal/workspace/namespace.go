@@ -31,7 +31,10 @@ import (
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
 )
 
-const licenseInjectLabelKey = "license.phison.com/inject"
+const (
+	licenseInjectLabelKey      = "license.phison.com/inject"
+	rancherProjectIDAnnotation = "field.cattle.io/projectId"
+)
 
 // podSecurityLabels returns the Pod Security admission labels applied to every
 // workspace namespace: enforce at baseline as a practical multi-tenant floor,
@@ -80,6 +83,13 @@ func ReconcileNamespace(ctx context.Context, c client.Client, scheme *runtime.Sc
 			namespace.Labels[licenseInjectLabelKey] = "true"
 		} else {
 			delete(namespace.Labels, licenseInjectLabelKey)
+		}
+
+		if w.Spec.RancherProjectID != "" {
+			if namespace.Annotations == nil {
+				namespace.Annotations = map[string]string{}
+			}
+			namespace.Annotations[rancherProjectIDAnnotation] = w.Spec.RancherProjectID
 		}
 
 		// Set OwnerReference to ensure garbage collection works
