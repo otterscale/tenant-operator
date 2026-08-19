@@ -41,6 +41,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	consolev1alpha1 "github.com/otterscale/api/console/v1alpha1"
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
 
 	"github.com/otterscale/tenant-operator/internal/controller"
@@ -66,6 +67,7 @@ func init() {
 
 	utilruntime.Must(sourcev1.AddToScheme(scheme))
 	utilruntime.Must(tenantv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(consolev1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -233,17 +235,32 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "Workspace")
 		os.Exit(1)
 	}
+
+	if err := (&controller.TerminalReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("terminal-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "Terminal")
+		os.Exit(1)
+	}
+
 	// nolint:goconst
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
 		// Construct the operator's service account identity from environment variables
 		// injected via the Kubernetes Downward API (see config/manager/manager.yaml).
-		// This allows the validating webhook to exempt the operator's own reconciliation
+		// This allows the validating webhooks to exempt the operator's own reconciliation
 		// updates regardless of the namespace it is deployed in.
 		podServiceAccount := cmp.Or(os.Getenv("POD_SERVICE_ACCOUNT"), operatorServiceAccount)
 		operatorSA := workspace.OperatorServiceAccountIdentity(podNamespace, podServiceAccount)
 
 		if err := webhookv1alpha1.SetupWorkspaceWebhookWithManager(mgr, operatorSA); err != nil {
 			setupLog.Error(err, "Failed to create webhook", "webhook", "Workspace")
+			os.Exit(1)
+		}
+
+		if err := webhookv1alpha1.SetupTerminalWebhookWithManager(mgr, operatorSA); err != nil {
+			setupLog.Error(err, "Failed to create webhook", "webhook", "Terminal")
 			os.Exit(1)
 		}
 	}

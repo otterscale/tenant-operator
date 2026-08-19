@@ -15,6 +15,11 @@ require (
 	sigs.k8s.io/yaml v1.6.0
 )
 
+// TODO(release): remove once github.com/otterscale/api ships a tagged
+// release containing the console/v1alpha1 (Terminal) package, and bump the
+// require above to that version instead.
+replace github.com/otterscale/api => ../api
+
 require (
 	cel.dev/expr v0.25.2 // indirect
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect

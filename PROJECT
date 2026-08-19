@@ -23,4 +23,16 @@ resources:
     defaulting: true
     validation: true
     webhookVersion: v1
+- controller: true
+  domain: otterscale.io
+  external: true
+  group: console
+  kind: Terminal
+  module: github.com/otterscale/api
+  path: github.com/otterscale/api/console/v1alpha1
+  version: v1alpha1
+  webhooks:
+    defaulting: true
+    validation: true
+    webhookVersion: v1
 version: "3"

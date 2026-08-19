@@ -1,0 +1,24 @@
+# Static, one-time infrastructure for the Terminal feature. Applied on its
+# own (e.g. `kubectl apply -k config/console`), independently of
+# config/default — this is a fixed, dedicated namespace, not the operator's
+# own deployment namespace, so it does not go through config/default's
+# namespace/namePrefix transforms.
+#
+# namespace.yaml MUST stay first: every other resource here is namespaced to
+# "console", and kubectl/kustomize's built-in apply ordering only guarantees
+# the Namespace is created before them when they're all applied together in
+# this one kustomization — do not split these across separate apply steps.
+#
+# Not included here: the registry image pull secret for the terminal/proxy
+# images. It must be provisioned out-of-band (SealedSecret, ExternalSecrets,
+# SOPS, ...) — never commit it as a plain Secret manifest — named
+# `dhi-pull-secret` in this namespace to match what pod.go references.
+resources:
+  - namespace.yaml
+  - service_account.yaml
+  - cluster_role.yaml
+  - cluster_role_binding.yaml
+  - configmap_user_kubeconfig.yaml
+  - configmap_proxy_kubeconfig.yaml
+  - role.yaml
+  - role_binding.yaml

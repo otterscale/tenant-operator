@@ -10,6 +10,7 @@ rules:
   - configmaps
   - limitranges
   - namespaces
+  - pods
   - resourcequotas
   - secrets
   verbs:
@@ -23,15 +24,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - pods
-  - services
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
   - serviceaccounts
   verbs:
   - create
@@ -40,6 +32,34 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - console.otterscale.io
+  resources:
+  - terminals
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - console.otterscale.io
+  resources:
+  - terminals/status
+  verbs:
+  - get
+  - patch
+  - update
 - apiGroups:
   - events.k8s.io
   resources:

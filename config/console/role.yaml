@@ -1,0 +1,21 @@
+# Self-service: allows all authenticated users to manage their own Terminal.
+# RBAC only grants access to the terminals API itself — never to pods,
+# secrets, or configmaps in this namespace. Fine-grained authorization (a
+# user may only create/update/delete a Terminal whose spec.subject matches
+# their own identity) is enforced by the validating webhook, the same split
+# used for Workspace self-service (see workspace_binding.yaml).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: terminal-user
+  namespace: console
+  labels:
+    app.kubernetes.io/name: tenant-operator
+    app.kubernetes.io/managed-by: kustomize
+rules:
+- apiGroups: ["console.otterscale.io"]
+  resources: ["terminals"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["console.otterscale.io"]
+  resources: ["terminals/status"]
+  verbs: ["get"]

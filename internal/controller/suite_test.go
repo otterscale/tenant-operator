@@ -29,6 +29,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -42,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	consolev1alpha1 "github.com/otterscale/api/console/v1alpha1"
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
 	webhooktenantv1alpha1 "github.com/otterscale/tenant-operator/internal/webhook/v1alpha1"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
@@ -72,6 +75,9 @@ var _ = BeforeSuite(func() {
 
 	var err error
 	err = tenantv1alpha1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
+	err = consolev1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	err = admissionregistrationv1.AddToScheme(scheme.Scheme)
@@ -125,6 +131,10 @@ var _ = BeforeSuite(func() {
 		"system:serviceaccount:otterscale-system:tenant-operator-controller-manager")
 	Expect(err).NotTo(HaveOccurred())
 
+	err = webhooktenantv1alpha1.SetupTerminalWebhookWithManager(mgr,
+		"system:serviceaccount:otterscale-system:tenant-operator-controller-manager")
+	Expect(err).NotTo(HaveOccurred())
+
 	go func() {
 		defer GinkgoRecover()
 		err = mgr.Start(ctx)
@@ -144,6 +154,27 @@ var _ = BeforeSuite(func() {
 
 	applyManifest(filepath.Join("..", "..", "config", "rbac", "workspace_editor_role.yaml"))
 	applyManifest(filepath.Join("..", "..", "config", "rbac", "workspace_binding.yaml"))
+
+	// Static console-namespace infrastructure (see the design plan's Phase 2)
+	// that Terminal's Pods reference: a real Namespace/ServiceAccount/ConfigMaps
+	// must exist for Pod creation to succeed against a real API server, and the
+	// terminal-user Role/RoleBinding is what the validation tests' impersonated
+	// clients rely on to even be allowed to call the terminals API.
+	applyManifest(filepath.Join("..", "..", "config", "console", "namespace.yaml"))
+	applyManifest(filepath.Join("..", "..", "config", "console", "service_account.yaml"))
+	applyManifest(filepath.Join("..", "..", "config", "console", "configmap_user_kubeconfig.yaml"))
+	applyManifest(filepath.Join("..", "..", "config", "console", "configmap_proxy_kubeconfig.yaml"))
+	applyManifest(filepath.Join("..", "..", "config", "console", "role.yaml"))
+	applyManifest(filepath.Join("..", "..", "config", "console", "role_binding.yaml"))
+
+	// dhi-pull-secret is deliberately not a committed manifest (see
+	// config/console/kustomization.yaml) — a minimal stand-in is created
+	// directly here so Pod creation in tests has something to reference.
+	Expect(k8sClient.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "dhi-pull-secret", Namespace: "console"},
+		Type:       corev1.SecretTypeDockerConfigJson,
+		Data:       map[string][]byte{corev1.DockerConfigJsonKey: []byte(`{"auths":{}}`)},
+	})).To(Succeed())
 })
 
 var _ = AfterSuite(func() {

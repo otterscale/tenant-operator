@@ -10,6 +10,26 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
+      path: /mutate-console-otterscale-io-v1alpha1-terminal
+  failurePolicy: Fail
+  name: mterminal-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - console.otterscale.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - terminals
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
       path: /mutate-tenant-otterscale-io-v1alpha1-workspace
   failurePolicy: Fail
   name: mworkspace-v1alpha1.kb.io
@@ -30,6 +50,27 @@ kind: ValidatingWebhookConfiguration
 metadata:
   name: validating-webhook-configuration
 webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-console-otterscale-io-v1alpha1-terminal
+  failurePolicy: Fail
+  name: vterminal-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - console.otterscale.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - terminals
+  sideEffects: None
 - admissionReviewVersions:
   - v1
   clientConfig:

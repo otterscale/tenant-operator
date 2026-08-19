@@ -41,6 +41,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	consolev1alpha1 "github.com/otterscale/api/console/v1alpha1"
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	// +kubebuilder:scaffold:imports
@@ -70,6 +71,9 @@ var _ = BeforeSuite(func() {
 
 	var err error
 	err = tenantv1alpha1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
+	err = consolev1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	err = admissionregistrationv1.AddToScheme(scheme.Scheme)
@@ -115,6 +119,9 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	err = SetupWorkspaceWebhookWithManager(mgr, "system:serviceaccount:test-system:test-controller-manager")
+	Expect(err).NotTo(HaveOccurred())
+
+	err = SetupTerminalWebhookWithManager(mgr, "system:serviceaccount:test-system:test-controller-manager")
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:webhook

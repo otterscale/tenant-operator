@@ -1,0 +1,19 @@
+# Grants ONLY the ability to impersonate a Kubernetes "user" identity — never
+# groups, service accounts, or uids. Bound exclusively to the
+# impersonation-proxy ServiceAccount (see cluster_role_binding.yaml), which
+# lives in the console namespace where no regular user has any access.
+#
+# If the set of valid subjects is enumerable, prefer restricting this further
+# with `resourceNames: [<uuid>, ...]` per environment; see Phase 6 in the
+# design plan for scoping this per-Terminal instead of cluster-wide.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: console-impersonator
+  labels:
+    app.kubernetes.io/name: tenant-operator
+    app.kubernetes.io/managed-by: kustomize
+rules:
+- apiGroups: [""]
+  resources: ["users"]
+  verbs: ["impersonate"]

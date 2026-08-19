@@ -1,0 +1,12 @@
+# Dedicated namespace that hosts every Terminal's Pod. No regular user is
+# ever granted any RoleBinding here (see role_binding.yaml, which only grants
+# access to the `terminals` API, never to Pods) — that is what keeps the
+# impersonation sidecar's ServiceAccount token, and every user's terminal
+# session, out of reach of everyone except the controller itself.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: console
+  labels:
+    app.kubernetes.io/name: tenant-operator
+    app.kubernetes.io/managed-by: kustomize
