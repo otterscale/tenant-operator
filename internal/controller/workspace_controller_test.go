@@ -33,8 +33,11 @@ import (
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/events"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
 	"github.com/otterscale/tenant-operator/internal/labels"
@@ -164,20 +167,107 @@ var _ = Describe("Workspace Controller", func() {
 		})
 	})
 
+	Context("Workspace Config", func() {
+		// Both endpoints are derived from Gateways, and the Gateway API CRDs are
+		// not installed in envtest. That makes this the graceful-degradation case:
+		// the operator must still provision the workspace. Endpoint resolution
+		// itself is covered by the workspace package unit tests.
+		It("should provision the workspace when the Gateway API is unavailable", func() {
+			fullyReconcile()
+
+			var cm corev1.ConfigMap
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: ws.ConfigName, Namespace: namespaceName}, &cm)
+			Expect(errors.IsNotFound(err)).To(BeTrue(), "workspace-config should not be created without endpoints")
+
+			fetchResource(workspace, resourceName, "")
+			Expect(workspace.Status.ConfigMapRef).To(BeNil())
+
+			readyCond := meta.FindStatusCondition(workspace.Status.Conditions, "Ready")
+			Expect(readyCond).NotTo(BeNil())
+			Expect(readyCond.Status).To(Equal(metav1.ConditionTrue))
+		})
+
+		It("should remove a workspace-config left over from when endpoints resolved", func() {
+			fullyReconcile() // creates the namespace
+
+			stale := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: ws.ConfigName, Namespace: namespaceName},
+				Data:       map[string]string{"ServiceEndpoint": "http://10.0.0.1"},
+			}
+			Expect(k8sClient.Create(ctx, stale)).To(Succeed())
+
+			executeReconcile()
+
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: ws.ConfigName, Namespace: namespaceName}, stale)
+				return errors.IsNotFound(err)
+			}, timeout, interval).Should(BeTrue(), "stale workspace-config should be removed")
+		})
+
+		It("should enqueue every workspace when an endpoint source Gateway changes", func() {
+			Expect(reconciler.findWorkspacesForGateway(ctx, &gatewayv1.Gateway{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      ws.PlatformGatewayName,
+					Namespace: ws.PlatformGatewayNamespace,
+				},
+			})).To(ContainElement(
+				reconcile.Request{NamespacedName: types.NamespacedName{Name: resourceName}},
+			))
+
+			By("Ignoring Gateways the endpoints are not derived from")
+			Expect(reconciler.findWorkspacesForGateway(ctx, &gatewayv1.Gateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: ws.PlatformGatewayNamespace},
+			})).To(BeEmpty())
+		})
+	})
+
+	Context("Watch Setup", func() {
+		It("should register all watches with the manager", func() {
+			mgr, err := ctrl.NewManager(cfg, ctrl.Options{
+				Scheme:         k8sClient.Scheme(),
+				LeaderElection: false,
+				Metrics:        metricsserver.Options{BindAddress: "0"},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect((&WorkspaceReconciler{
+				Client:   mgr.GetClient(),
+				Scheme:   mgr.GetScheme(),
+				Recorder: events.NewFakeRecorder(100),
+			}).SetupWithManager(mgr)).To(Succeed())
+		})
+	})
+
 	Context("Rancher Project", func() {
 		const rancherProjectID = "c-m-abcde:p-vwxyz"
 
+		// The Rancher Project ID is operator-wide configuration read from the
+		// tenant-operator-config ConfigMap, not a Workspace spec field.
 		BeforeEach(func() {
-			workspace = makeWorkspace(resourceName, namespaceName, func(w *tenantv1alpha1.Workspace) {
-				w.Spec.RancherProjectID = rancherProjectID
+			Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{Name: ws.OperatorConfigNamespace},
+			}))).To(Succeed())
+
+			globalConfig := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      ws.OperatorConfigName,
+					Namespace: ws.OperatorConfigNamespace,
+				},
+				Data: map[string]string{ws.RancherProjectIDConfigKey: rancherProjectID},
+			}
+			if err := k8sClient.Create(ctx, globalConfig); errors.IsAlreadyExists(err) {
+				fetchResource(globalConfig, ws.OperatorConfigName, ws.OperatorConfigNamespace)
+				globalConfig.Data = map[string]string{ws.RancherProjectIDConfigKey: rancherProjectID}
+				Expect(k8sClient.Update(ctx, globalConfig)).To(Succeed())
+			} else {
+				Expect(err).NotTo(HaveOccurred())
+			}
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, globalConfig))).To(Succeed())
 			})
 		})
 
-		It("should persist the CRD field and reconcile the namespace annotation", func() {
+		It("should reconcile the namespace annotation from the global config", func() {
 			fullyReconcile()
-
-			fetchResource(workspace, resourceName, "")
-			Expect(workspace.Spec.RancherProjectID).To(Equal(rancherProjectID))
 
 			var ns corev1.Namespace
 			fetchResource(&ns, namespaceName, "")
@@ -189,6 +279,20 @@ var _ = Describe("Workspace Controller", func() {
 
 			fetchResource(&ns, namespaceName, "")
 			Expect(ns.Annotations).To(HaveKeyWithValue("field.cattle.io/projectId", rancherProjectID))
+		})
+
+		It("should enqueue every workspace when the global config changes", func() {
+			globalConfig := &corev1.ConfigMap{}
+			fetchResource(globalConfig, ws.OperatorConfigName, ws.OperatorConfigNamespace)
+
+			Expect(reconciler.findWorkspacesForOperatorConfig(ctx, globalConfig)).To(ContainElement(
+				reconcile.Request{NamespacedName: types.NamespacedName{Name: resourceName}},
+			))
+
+			By("Ignoring ConfigMaps that are not the global config")
+			Expect(reconciler.findWorkspacesForOperatorConfig(ctx, &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: ws.ConfigName, Namespace: namespaceName},
+			})).To(BeEmpty())
 		})
 	})
 

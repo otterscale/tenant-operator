@@ -1,0 +1,161 @@
+/*
+Copyright 2026 The OtterScale Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package controller
+
+import (
+	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	ws "github.com/otterscale/tenant-operator/internal/workspace"
+)
+
+func endpointSourceGateway(addresses ...string) *gatewayv1.Gateway {
+	specAddresses := make([]gatewayv1.GatewaySpecAddress, 0, len(addresses))
+	for _, address := range addresses {
+		specAddresses = append(specAddresses, gatewayv1.GatewaySpecAddress{Value: address})
+	}
+	return &gatewayv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ws.PlatformGatewayName,
+			Namespace: ws.PlatformGatewayNamespace,
+		},
+		Spec: gatewayv1.GatewaySpec{Addresses: specAddresses},
+	}
+}
+
+func TestGatewayChangedPredicate(t *testing.T) {
+	t.Parallel()
+
+	unrelated := &gatewayv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: ws.PlatformGatewayNamespace},
+	}
+	p := gatewayChangedPredicate()
+
+	t.Run("create and delete", func(t *testing.T) {
+		if !p.Create(event.CreateEvent{Object: endpointSourceGateway()}) {
+			t.Error("endpoint source gateway create was filtered out")
+		}
+		if p.Create(event.CreateEvent{Object: unrelated}) {
+			t.Error("unrelated gateway create was let through")
+		}
+		if !p.Delete(event.DeleteEvent{Object: endpointSourceGateway()}) {
+			t.Error("endpoint source gateway delete was filtered out")
+		}
+	})
+
+	t.Run("update on changed addresses", func(t *testing.T) {
+		if !p.Update(event.UpdateEvent{
+			ObjectOld: endpointSourceGateway("10.0.0.1"),
+			ObjectNew: endpointSourceGateway("10.0.0.2"),
+		}) {
+			t.Error("changed spec.addresses was filtered out")
+		}
+	})
+
+	t.Run("update on changed listeners", func(t *testing.T) {
+		hostname := gatewayv1.Hostname("models.example.com")
+		updated := endpointSourceGateway("10.0.0.1")
+		updated.Spec.Listeners = []gatewayv1.Listener{{Name: "https", Hostname: &hostname}}
+		if !p.Update(event.UpdateEvent{ObjectOld: endpointSourceGateway("10.0.0.1"), ObjectNew: updated}) {
+			t.Error("changed spec.listeners was filtered out")
+		}
+	})
+
+	t.Run("update with unchanged spec", func(t *testing.T) {
+		updated := endpointSourceGateway("10.0.0.1")
+		updated.Labels = map[string]string{"unrelated": "churn"}
+		if p.Update(event.UpdateEvent{ObjectOld: endpointSourceGateway("10.0.0.1"), ObjectNew: updated}) {
+			t.Error("metadata-only update was let through")
+		}
+	})
+
+	t.Run("update on an unrelated gateway", func(t *testing.T) {
+		updated := unrelated.DeepCopy()
+		updated.Spec.Addresses = []gatewayv1.GatewaySpecAddress{{Value: "10.0.0.2"}}
+		if p.Update(event.UpdateEvent{ObjectOld: unrelated, ObjectNew: updated}) {
+			t.Error("unrelated gateway update was let through")
+		}
+	})
+}
+
+func operatorConfigMap(data map[string]string) *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ws.OperatorConfigName,
+			Namespace: ws.OperatorConfigNamespace,
+		},
+		Data: data,
+	}
+}
+
+func TestOperatorConfigChangedPredicate(t *testing.T) {
+	t.Parallel()
+
+	otherConfig := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: ws.ConfigName, Namespace: "workspace-a"},
+		Data:       map[string]string{ws.RancherProjectIDConfigKey: "c-m-abcde:p-vwxyz"},
+	}
+	p := operatorConfigChangedPredicate()
+
+	t.Run("create", func(t *testing.T) {
+		if !p.Create(event.CreateEvent{Object: operatorConfigMap(nil)}) {
+			t.Error("global config create was filtered out")
+		}
+		if p.Create(event.CreateEvent{Object: otherConfig}) {
+			t.Error("unrelated ConfigMap create was let through")
+		}
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		if !p.Delete(event.DeleteEvent{Object: operatorConfigMap(nil)}) {
+			t.Error("global config delete was filtered out")
+		}
+		if p.Delete(event.DeleteEvent{Object: otherConfig}) {
+			t.Error("unrelated ConfigMap delete was let through")
+		}
+	})
+
+	t.Run("update on changed data", func(t *testing.T) {
+		old := operatorConfigMap(map[string]string{ws.RancherProjectIDConfigKey: "c-m-abcde:p-vwxyz"})
+		updated := operatorConfigMap(map[string]string{ws.RancherProjectIDConfigKey: "local:p-other"})
+		if !p.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: updated}) {
+			t.Error("changed data was filtered out")
+		}
+	})
+
+	t.Run("update with unchanged data", func(t *testing.T) {
+		data := map[string]string{ws.RancherProjectIDConfigKey: "c-m-abcde:p-vwxyz"}
+		old := operatorConfigMap(data)
+		updated := operatorConfigMap(map[string]string{ws.RancherProjectIDConfigKey: "c-m-abcde:p-vwxyz"})
+		updated.Labels = map[string]string{"unrelated": "churn"}
+		if p.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: updated}) {
+			t.Error("metadata-only update was let through")
+		}
+	})
+
+	t.Run("update on an unrelated ConfigMap", func(t *testing.T) {
+		updated := otherConfig.DeepCopy()
+		updated.Data = map[string]string{ws.RancherProjectIDConfigKey: "local:p-other"}
+		if p.Update(event.UpdateEvent{ObjectOld: otherConfig, ObjectNew: updated}) {
+			t.Error("unrelated ConfigMap update was let through")
+		}
+	})
+}

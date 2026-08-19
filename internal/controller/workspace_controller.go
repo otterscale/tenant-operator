@@ -21,15 +21,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
+	"maps"
 	"slices"
 	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -46,6 +46,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
 	"github.com/otterscale/tenant-operator/internal/harbor"
@@ -82,6 +83,7 @@ type WorkspaceReconciler struct {
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=source.toolkit.fluxcd.io,resources=helmrepositories,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 
 // missingHarborMembersRequeue is how long to wait before retrying when Harbor
 // members are missing. Harbor provisions users on first OIDC login, so the
@@ -212,7 +214,7 @@ func (r *WorkspaceReconciler) setReadyConditionFalse(ctx context.Context, w *ten
 
 // SetupWithManager registers the controller with the Manager and defines watches.
 func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&tenantv1alpha1.Workspace{},
 			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
@@ -226,31 +228,125 @@ func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&sourcev1.HelmRepository{}).
 		Watches(
-			&corev1.Service{},
-			handler.EnqueueRequestsFromMapFunc(r.findWorkspacesForGatewayService),
-			builder.WithPredicates(gatewayServiceChangedPredicate()),
-		).
-		Named("workspace").
-		Complete(r)
+			&corev1.ConfigMap{},
+			handler.EnqueueRequestsFromMapFunc(r.findWorkspacesForOperatorConfig),
+			builder.WithPredicates(operatorConfigChangedPredicate()),
+		)
+
+	// The Gateway API is optional. Without its CRDs the informer would fail to
+	// start and take the whole manager down, so only watch Gateways when the kind
+	// is actually served — ReconcileConfig already degrades to "no endpoints" there.
+	if gatewayAPIServed(mgr) {
+		b = b.Watches(
+			&gatewayv1.Gateway{},
+			handler.EnqueueRequestsFromMapFunc(r.findWorkspacesForGateway),
+			builder.WithPredicates(gatewayChangedPredicate()),
+		)
+	} else {
+		mgr.GetLogger().Info("Gateway API not served by the cluster, " +
+			"workspace endpoints will not react to Gateway changes")
+	}
+
+	return b.Named("workspace").Complete(r)
 }
 
-// isGatewayService reports whether obj carries the labels of the model
-// gateway or object gateway Service. Used both to filter watch events and
-// to map a Service event to the Workspaces that depend on it.
-func isGatewayService(obj client.Object) bool {
+// gatewayAPIServed reports whether the cluster serves the Gateway kind. The
+// RESTMapper is cached, so this is a startup-time decision: installing the
+// Gateway API afterwards requires an operator restart for the watch to appear.
+func gatewayAPIServed(mgr ctrl.Manager) bool {
+	_, err := mgr.GetRESTMapper().RESTMapping(
+		schema.GroupKind{Group: gatewayv1.GroupName, Kind: "Gateway"},
+		gatewayv1.SchemeGroupVersion.Version,
+	)
+	return err == nil
+}
+
+func (r *WorkspaceReconciler) findWorkspacesForGateway(ctx context.Context, obj client.Object) []reconcile.Request {
+	if !workspace.IsEndpointSourceGateway(obj) {
+		return nil
+	}
+	return r.allWorkspaceRequests(ctx)
+}
+
+// gatewayChangedPredicate filters Gateway events down to the Gateways the
+// workspace endpoints are derived from, and for updates down to the two fields
+// those endpoints read: spec.addresses and spec.listeners.
+func gatewayChangedPredicate() predicate.Funcs {
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool {
+			return workspace.IsEndpointSourceGateway(e.Object)
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return workspace.IsEndpointSourceGateway(e.Object)
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			if !workspace.IsEndpointSourceGateway(e.ObjectNew) {
+				return false
+			}
+			oldGateway, ok1 := e.ObjectOld.(*gatewayv1.Gateway)
+			newGateway, ok2 := e.ObjectNew.(*gatewayv1.Gateway)
+			if !ok1 || !ok2 {
+				return false
+			}
+			return !equality.Semantic.DeepEqual(oldGateway.Spec.Addresses, newGateway.Spec.Addresses) ||
+				!equality.Semantic.DeepEqual(oldGateway.Spec.Listeners, newGateway.Spec.Listeners)
+		},
+		GenericFunc: func(e event.GenericEvent) bool {
+			return workspace.IsEndpointSourceGateway(e.Object)
+		},
+	}
+}
+
+// isOperatorConfig reports whether obj is the operator-wide tenant-operator-config
+// ConfigMap, which holds settings the operator cannot discover from the cluster
+// (e.g. the Rancher Project ID).
+func isOperatorConfig(obj client.Object) bool {
 	if obj == nil {
 		return false
 	}
-	svcLabels := labels.Set(obj.GetLabels())
-	return labels.Set(workspace.ModelGatewayLabels).AsSelector().Matches(svcLabels) ||
-		labels.Set(workspace.ObjectGatewayLabels).AsSelector().Matches(svcLabels)
+	return obj.GetName() == workspace.OperatorConfigName &&
+		obj.GetNamespace() == workspace.OperatorConfigNamespace
 }
 
-func (r *WorkspaceReconciler) findWorkspacesForGatewayService(ctx context.Context, obj client.Object) []reconcile.Request {
-	if !isGatewayService(obj) {
+func (r *WorkspaceReconciler) findWorkspacesForOperatorConfig(ctx context.Context, obj client.Object) []reconcile.Request {
+	if !isOperatorConfig(obj) {
 		return nil
 	}
+	return r.allWorkspaceRequests(ctx)
+}
 
+// operatorConfigChangedPredicate filters ConfigMap events down to meaningful
+// changes of the tenant-operator-config ConfigMap. Updates that leave Data
+// untouched are dropped so unrelated metadata churn does not fan out a
+// reconcile across every Workspace.
+func operatorConfigChangedPredicate() predicate.Funcs {
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool {
+			return isOperatorConfig(e.Object)
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return isOperatorConfig(e.Object)
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			if !isOperatorConfig(e.ObjectNew) {
+				return false
+			}
+			oldConfig, ok1 := e.ObjectOld.(*corev1.ConfigMap)
+			newConfig, ok2 := e.ObjectNew.(*corev1.ConfigMap)
+			if !ok1 || !ok2 {
+				return false
+			}
+			return !maps.Equal(oldConfig.Data, newConfig.Data)
+		},
+		GenericFunc: func(e event.GenericEvent) bool {
+			return isOperatorConfig(e.Object)
+		},
+	}
+}
+
+// allWorkspaceRequests enqueues every Workspace. Used by watches on
+// operator-wide inputs, where a single change affects all workspaces alike.
+func (r *WorkspaceReconciler) allWorkspaceRequests(ctx context.Context) []reconcile.Request {
 	var wsList tenantv1alpha1.WorkspaceList
 	if err := r.List(ctx, &wsList); err != nil {
 		return nil
@@ -265,38 +361,6 @@ func (r *WorkspaceReconciler) findWorkspacesForGatewayService(ctx context.Contex
 		})
 	}
 	return requests
-}
-
-func gatewayServiceChangedPredicate() predicate.Funcs {
-	return predicate.Funcs{
-		CreateFunc: func(e event.CreateEvent) bool {
-			return isGatewayService(e.Object)
-		},
-		DeleteFunc: func(e event.DeleteEvent) bool {
-			return isGatewayService(e.Object)
-		},
-		UpdateFunc: func(e event.UpdateEvent) bool {
-			oldSvc, ok1 := e.ObjectOld.(*corev1.Service)
-			newSvc, ok2 := e.ObjectNew.(*corev1.Service)
-			if !ok1 || !ok2 {
-				return false
-			}
-			oldIsGateway := isGatewayService(oldSvc)
-			newIsGateway := isGatewayService(newSvc)
-			if !oldIsGateway && !newIsGateway {
-				return false
-			}
-			// Label was added/removed (gateway-ness changed) or ports changed
-			// while it's a gateway service.
-			if oldIsGateway != newIsGateway {
-				return true
-			}
-			return !reflect.DeepEqual(oldSvc.Spec.Ports, newSvc.Spec.Ports)
-		},
-		GenericFunc: func(e event.GenericEvent) bool {
-			return isGatewayService(e.Object)
-		},
-	}
 }
 
 // updateStatus calculates the status based on the current observed state and patches the resource.

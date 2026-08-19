@@ -42,6 +42,7 @@ import (
 
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/otterscale/tenant-operator/internal/controller"
 	"github.com/otterscale/tenant-operator/internal/harbor"
@@ -65,6 +66,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(sourcev1.AddToScheme(scheme))
+	utilruntime.Must(gatewayv1.AddToScheme(scheme))
 	utilruntime.Must(tenantv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }

@@ -48,6 +48,14 @@ rules:
   - create
   - patch
 - apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - gateways
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - networking.k8s.io
   resources:
   - networkpolicies

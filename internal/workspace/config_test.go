@@ -18,195 +18,319 @@ package workspace
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
-func TestResolveClusterIP(t *testing.T) {
+func newConfigTestClient(t *testing.T, objects ...client.Object) client.Client {
+	t.Helper()
+
 	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add core scheme: %v", err)
+	}
+	if err := gatewayv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add gateway scheme: %v", err)
+	}
+	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+}
+
+func platformGateway(name, namespace string, addresses ...string) *gatewayv1.Gateway {
+	specAddresses := make([]gatewayv1.GatewaySpecAddress, 0, len(addresses))
+	for _, address := range addresses {
+		specAddresses = append(specAddresses, gatewayv1.GatewaySpecAddress{Value: address})
+	}
+	return &gatewayv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: gatewayv1.GatewaySpec{
+			GatewayClassName: "envoy",
+			Addresses:        specAddresses,
+		},
+	}
+}
+
+func TestResolveExternalAddress(t *testing.T) {
+	t.Parallel()
+
+	// wantErr distinguishes the two skip reasons ReconcileConfig keys off:
+	// a missing Gateway (NotFound) versus one that exists but is misconfigured
+	// (errGatewayAddressUnusable). Anything else must surface as a real error.
+	const (
+		errNone = iota
+		errNotFound
+		errUnusable
+	)
 
 	tests := []struct {
-		name    string
-		objects []metav1.Object
-		wantIP  string
-		wantErr bool
+		name        string
+		objects     []client.Object
+		wantAddress string
+		wantErr     int
 	}{
 		{
-			name: "valid controlPlaneEndpoint with ip:port",
-			objects: []metav1.Object{
-				&corev1.ConfigMap{
-					ObjectMeta: metav1.ObjectMeta{Name: "kubeadm-config", Namespace: "kube-system"},
-					Data: map[string]string{
-						"ClusterConfiguration": "controlPlaneEndpoint: 10.102.197.202:8443\n",
-					},
-				},
-			},
-			wantIP: "10.102.197.202",
+			name:        "single declared address",
+			objects:     []client.Object{platformGateway(PlatformGatewayName, PlatformGatewayNamespace, "10.102.197.202")},
+			wantAddress: "10.102.197.202",
+			wantErr:     errNone,
 		},
 		{
-			name: "controlPlaneEndpoint without port",
-			objects: []metav1.Object{
-				&corev1.ConfigMap{
-					ObjectMeta: metav1.ObjectMeta{Name: "kubeadm-config", Namespace: "kube-system"},
-					Data: map[string]string{
-						"ClusterConfiguration": "controlPlaneEndpoint: 10.0.0.1\n",
-					},
-				},
-			},
-			wantIP: "10.0.0.1",
+			name:    "gateway missing",
+			wantErr: errNotFound,
 		},
 		{
-			name:    "kubeadm-config not found",
-			objects: []metav1.Object{},
-			wantErr: true,
+			name:    "gateway declares no addresses",
+			objects: []client.Object{platformGateway(PlatformGatewayName, PlatformGatewayNamespace)},
+			wantErr: errUnusable,
 		},
 		{
-			name: "missing ClusterConfiguration key",
-			objects: []metav1.Object{
-				&corev1.ConfigMap{
-					ObjectMeta: metav1.ObjectMeta{Name: "kubeadm-config", Namespace: "kube-system"},
-					Data:       map[string]string{"other": "data"},
-				},
+			name: "gateway declares an empty address value",
+			objects: []client.Object{
+				platformGateway(PlatformGatewayName, PlatformGatewayNamespace, ""),
 			},
-			wantErr: true,
+			wantErr: errUnusable,
 		},
 		{
-			name: "empty controlPlaneEndpoint",
-			objects: []metav1.Object{
-				&corev1.ConfigMap{
-					ObjectMeta: metav1.ObjectMeta{Name: "kubeadm-config", Namespace: "kube-system"},
-					Data: map[string]string{
-						"ClusterConfiguration": "kubernetesVersion: v1.35.3\n",
-					},
-				},
+			name: "gateway declares several addresses",
+			objects: []client.Object{
+				platformGateway(PlatformGatewayName, PlatformGatewayNamespace, "10.0.0.1", "10.0.0.2"),
 			},
-			wantErr: true,
+			wantErr: errUnusable,
+		},
+		{
+			name: "same-named gateway in another namespace is ignored",
+			objects: []client.Object{
+				platformGateway(PlatformGatewayName, "kserve", "10.0.0.9"),
+			},
+			wantErr: errNotFound,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			objs := make([]runtime.Object, len(tt.objects))
-			for i, o := range tt.objects {
-				objs[i] = o.(runtime.Object)
-			}
-			c := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(objs...).Build()
+			t.Parallel()
 
-			got, err := resolveClusterIP(context.Background(), c)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("resolveClusterIP() error = %v, wantErr %v", err, tt.wantErr)
-				return
+			got, err := resolveExternalAddress(context.Background(), newConfigTestClient(t, tt.objects...))
+			switch tt.wantErr {
+			case errNone:
+				if err != nil {
+					t.Fatalf("resolveExternalAddress() error = %v, want nil", err)
+				}
+			case errNotFound:
+				if !apierrors.IsNotFound(err) {
+					t.Fatalf("resolveExternalAddress() error = %v, want NotFound", err)
+				}
+			case errUnusable:
+				if !errors.Is(err, errGatewayAddressUnusable) {
+					t.Fatalf("resolveExternalAddress() error = %v, want errGatewayAddressUnusable", err)
+				}
 			}
-			if got != tt.wantIP {
-				t.Errorf("resolveClusterIP() = %q, want %q", got, tt.wantIP)
+			if got != tt.wantAddress {
+				t.Errorf("resolveExternalAddress() = %q, want %q", got, tt.wantAddress)
 			}
 		})
 	}
 }
 
-func TestResolveServiceNodePort(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
+func TestIsEndpointSourceGateway(t *testing.T) {
+	t.Parallel()
 
 	tests := []struct {
-		name     string
-		objects  []metav1.Object
-		labels   map[string]string
-		portName string
-		wantPort int32
-		wantErr  bool
+		name      string
+		namespace string
+		gwName    string
+		want      bool
+	}{
+		{"platform gateway", PlatformGatewayNamespace, PlatformGatewayName, true},
+		{"model gateway", ModelGatewayNamespace, ModelGatewayName, true},
+		{"other gateway in the platform namespace", PlatformGatewayNamespace, "some-other-gateway", false},
+		{"other gateway in the KServe namespace", ModelGatewayNamespace, "some-other-gateway", false},
+		{"platform gateway name elsewhere", "default", PlatformGatewayName, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := IsEndpointSourceGateway(&gatewayv1.Gateway{
+				ObjectMeta: metav1.ObjectMeta{Name: tt.gwName, Namespace: tt.namespace},
+			})
+			if got != tt.want {
+				t.Errorf("IsEndpointSourceGateway(%s/%s) = %v, want %v", tt.namespace, tt.gwName, got, tt.want)
+			}
+		})
+	}
+
+	if IsEndpointSourceGateway(nil) {
+		t.Error("IsEndpointSourceGateway(nil) = true, want false")
+	}
+}
+
+func modelGateway(listeners ...gatewayv1.Listener) *gatewayv1.Gateway {
+	return &gatewayv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: ModelGatewayName, Namespace: ModelGatewayNamespace},
+		Spec: gatewayv1.GatewaySpec{
+			GatewayClassName: "envoy",
+			Listeners:        listeners,
+		},
+	}
+}
+
+// listener builds a Listener with a unique name. The name is deliberately
+// unrelated to the protocol: endpoint resolution must key off Protocol only.
+func listener(protocol gatewayv1.ProtocolType, port int32, hostname *string) gatewayv1.Listener {
+	l := gatewayv1.Listener{
+		Name:     gatewayv1.SectionName(fmt.Sprintf("listener-%d", port)),
+		Port:     gatewayv1.PortNumber(port),
+		Protocol: protocol,
+	}
+	if hostname != nil {
+		h := gatewayv1.Hostname(*hostname)
+		l.Hostname = &h
+	}
+	return l
+}
+
+func TestResolveModelGatewayEndpoint(t *testing.T) {
+	t.Parallel()
+
+	hostname := "models.example.com"
+	other := "other.example.com"
+	empty := ""
+
+	tests := []struct {
+		name            string
+		objects         []client.Object
+		externalAddress string
+		wantEndpoint    string
+		wantErr         bool
 	}{
 		{
-			name: "valid service with named nodeport",
-			objects: []metav1.Object{
-				&corev1.Service{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "my-svc",
-						Namespace: "my-ns",
-						Labels:    map[string]string{"app": "demo"},
-					},
-					Spec: corev1.ServiceSpec{
-						Type: corev1.ServiceTypeNodePort,
-						Ports: []corev1.ServicePort{
-							{Name: "http", NodePort: 30000},
-							{Name: "grpc", NodePort: 30001},
-						},
-					},
-				},
-			},
-			labels:   map[string]string{"app": "demo"},
-			portName: "grpc",
-			wantPort: 30001,
+			name: "HTTPS hostname wins over the external address",
+			objects: []client.Object{modelGateway(
+				listener(gatewayv1.HTTPProtocolType, 80, nil),
+				listener(gatewayv1.HTTPSProtocolType, 443, &hostname),
+			)},
+			externalAddress: "10.0.0.1",
+			wantEndpoint:    "https://models.example.com",
 		},
 		{
-			name:     "service not found",
-			objects:  []metav1.Object{},
-			labels:   map[string]string{"app": "missing"},
-			portName: "http",
-			wantErr:  true,
+			name: "HTTPS without a hostname spells out the port",
+			objects: []client.Object{modelGateway(
+				listener(gatewayv1.HTTPSProtocolType, 443, nil),
+				listener(gatewayv1.HTTPProtocolType, 80, nil),
+			)},
+			externalAddress: "10.0.0.1",
+			wantEndpoint:    "https://10.0.0.1:443",
 		},
 		{
-			name: "port name not found",
-			objects: []metav1.Object{
-				&corev1.Service{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "my-svc",
-						Namespace: "my-ns",
-						Labels:    map[string]string{"app": "demo"},
-					},
-					Spec: corev1.ServiceSpec{
-						Ports: []corev1.ServicePort{
-							{Name: "http", NodePort: 30000},
-						},
-					},
-				},
-			},
-			labels:   map[string]string{"app": "demo"},
-			portName: "missing",
-			wantErr:  true,
+			name: "an empty hostname counts as no hostname",
+			objects: []client.Object{modelGateway(
+				listener(gatewayv1.HTTPSProtocolType, 443, &empty),
+				listener(gatewayv1.HTTPProtocolType, 80, nil),
+			)},
+			externalAddress: "10.0.0.1",
+			wantEndpoint:    "https://10.0.0.1:443",
 		},
 		{
-			name: "nodeport is zero",
-			objects: []metav1.Object{
-				&corev1.Service{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "my-svc",
-						Namespace: "my-ns",
-						Labels:    map[string]string{"app": "demo"},
-					},
-					Spec: corev1.ServiceSpec{
-						Ports: []corev1.ServicePort{
-							{Name: "http", NodePort: 0},
-						},
-					},
-				},
-			},
-			labels:   map[string]string{"app": "demo"},
-			portName: "http",
-			wantErr:  true,
+			name: "a hostname on any HTTPS listener wins over the address",
+			objects: []client.Object{modelGateway(
+				listener(gatewayv1.HTTPSProtocolType, 443, nil),
+				listener(gatewayv1.HTTPSProtocolType, 8443, &other),
+			)},
+			externalAddress: "10.0.0.1",
+			wantEndpoint:    "https://other.example.com",
+		},
+		{
+			name:            "only HTTP",
+			objects:         []client.Object{modelGateway(listener(gatewayv1.HTTPProtocolType, 80, nil))},
+			externalAddress: "10.0.0.1",
+			wantEndpoint:    "http://10.0.0.1:80",
+		},
+		{
+			name:            "only HTTP, carrying a hostname",
+			objects:         []client.Object{modelGateway(listener(gatewayv1.HTTPProtocolType, 80, &hostname))},
+			externalAddress: "10.0.0.1",
+			wantEndpoint:    "http://models.example.com",
+		},
+		{
+			name:            "non-standard HTTPS port",
+			objects:         []client.Object{modelGateway(listener(gatewayv1.HTTPSProtocolType, 8443, nil))},
+			externalAddress: "10.0.0.1",
+			wantEndpoint:    "https://10.0.0.1:8443",
+		},
+		{
+			name: "HTTPS wins even when HTTP is listed first and has the hostname",
+			objects: []client.Object{modelGateway(
+				listener(gatewayv1.HTTPProtocolType, 80, &hostname),
+				listener(gatewayv1.HTTPSProtocolType, 443, nil),
+			)},
+			externalAddress: "10.0.0.1",
+			wantEndpoint:    "https://10.0.0.1:443",
+		},
+		{
+			name: "a listener named https but serving HTTP stays http",
+			objects: []client.Object{modelGateway(func() gatewayv1.Listener {
+				l := listener(gatewayv1.HTTPProtocolType, 80, nil)
+				l.Name = "https"
+				return l
+			}())},
+			externalAddress: "10.0.0.1",
+			wantEndpoint:    "http://10.0.0.1:80",
+		},
+		{
+			name:            "HTTP without a resolved external address",
+			objects:         []client.Object{modelGateway(listener(gatewayv1.HTTPProtocolType, 80, nil))},
+			externalAddress: "",
+			wantEndpoint:    "",
+		},
+		{
+			name: "no external address falls through to a listener with a hostname",
+			objects: []client.Object{modelGateway(
+				listener(gatewayv1.HTTPSProtocolType, 443, nil),
+				listener(gatewayv1.HTTPProtocolType, 80, &hostname),
+			)},
+			externalAddress: "",
+			wantEndpoint:    "http://models.example.com",
+		},
+		{
+			name:            "no protocol the operator derives endpoints from",
+			objects:         []client.Object{modelGateway(listener(gatewayv1.TCPProtocolType, 8080, nil))},
+			externalAddress: "10.0.0.1",
+			wantEndpoint:    "",
+		},
+		{
+			name:            "gateway missing",
+			externalAddress: "10.0.0.1",
+			wantErr:         true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			objs := make([]runtime.Object, len(tt.objects))
-			for i, o := range tt.objects {
-				objs[i] = o.(runtime.Object)
-			}
-			c := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(objs...).Build()
+			t.Parallel()
 
-			got, err := resolveServiceNodePort(context.Background(), c, tt.labels, tt.portName)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("resolveServiceNodePort() error = %v, wantErr %v", err, tt.wantErr)
+			c := newConfigTestClient(t, tt.objects...)
+			got, err := resolveModelGatewayEndpoint(context.Background(), c, tt.externalAddress)
+			if tt.wantErr {
+				if !apierrors.IsNotFound(err) {
+					t.Fatalf("resolveModelGatewayEndpoint() error = %v, want NotFound", err)
+				}
 				return
 			}
-			if got != tt.wantPort {
-				t.Errorf("resolveServiceNodePort() = %d, want %d", got, tt.wantPort)
+			if err != nil {
+				t.Fatalf("resolveModelGatewayEndpoint() error = %v", err)
+			}
+			if got != tt.wantEndpoint {
+				t.Errorf("resolveModelGatewayEndpoint() = %q, want %q", got, tt.wantEndpoint)
 			}
 		})
 	}

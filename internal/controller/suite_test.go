@@ -45,6 +45,7 @@ import (
 	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
 	webhooktenantv1alpha1 "github.com/otterscale/tenant-operator/internal/webhook/v1alpha1"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -78,6 +79,12 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	err = sourcev1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
+	// Registered so the operator's Gateway lookup resolves the kind. The Gateway
+	// API CRDs are not installed in envtest, so the lookup reports a no-match
+	// error, which ReconcileConfig treats as "no model gateway".
+	err = gatewayv1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme
