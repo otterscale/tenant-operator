@@ -24,12 +24,13 @@ import (
 )
 
 // Fallbacks applied whenever a Terminal leaves the corresponding spec field
-// empty. The image and resource values mirror the original hand-written
-// web-terminal manifest this operator replaces.
+// empty. The resource values mirror the original hand-written web-terminal
+// manifest this operator replaces.
 const (
 	// DefaultImage is used for both the "terminal" and "proxy" containers
-	// when Terminal.Spec.Image is empty.
-	DefaultImage = "dhi.io/kubectl:1-compat"
+	// when Terminal.Spec.Image is empty. It must ship a kubectl binary and a
+	// POSIX shell, since both containers' commands are run through /bin/sh.
+	DefaultImage = "bitnami/kubectl:latest"
 
 	// DefaultIdleTimeout is how long a Terminal may stay inactive before the
 	// controller garbage-collects it, used when the Terminal's own

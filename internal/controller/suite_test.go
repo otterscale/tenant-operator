@@ -29,8 +29,6 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -166,15 +164,6 @@ var _ = BeforeSuite(func() {
 	applyManifest(filepath.Join("..", "..", "config", "console", "configmap_proxy_kubeconfig.yaml"))
 	applyManifest(filepath.Join("..", "..", "config", "console", "role.yaml"))
 	applyManifest(filepath.Join("..", "..", "config", "console", "role_binding.yaml"))
-
-	// dhi-pull-secret is deliberately not a committed manifest (see
-	// config/console/kustomization.yaml) — a minimal stand-in is created
-	// directly here so Pod creation in tests has something to reference.
-	Expect(k8sClient.Create(ctx, &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "dhi-pull-secret", Namespace: "console"},
-		Type:       corev1.SecretTypeDockerConfigJson,
-		Data:       map[string][]byte{corev1.DockerConfigJsonKey: []byte(`{"auths":{}}`)},
-	})).To(Succeed())
 })
 
 var _ = AfterSuite(func() {

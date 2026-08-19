@@ -9,10 +9,11 @@
 # the Namespace is created before them when they're all applied together in
 # this one kustomization — do not split these across separate apply steps.
 #
-# Not included here: the registry image pull secret for the terminal/proxy
-# images. It must be provisioned out-of-band (SealedSecret, ExternalSecrets,
-# SOPS, ...) — never commit it as a plain Secret manifest — named
-# `dhi-pull-secret` in this namespace to match what pod.go references.
+# The terminal/proxy image is pulled anonymously, so no imagePullSecret is
+# created or referenced here. Pointing a Terminal at a private registry
+# instead requires attaching the credentials to the impersonation-proxy
+# ServiceAccount's imagePullSecrets, since the Pod spec built by
+# internal/terminal/pod.go sets none of its own.
 resources:
   - namespace.yaml
   - service_account.yaml

@@ -53,7 +53,6 @@ const (
 	proxyContainerName    = "proxy"
 
 	serviceAccountName           = "impersonation-proxy"
-	imagePullSecretName          = "dhi-pull-secret"
 	userKubeconfigConfigMapName  = "user-kubeconfig"
 	proxyKubeconfigConfigMapName = "proxy-kubeconfig"
 
@@ -162,7 +161,6 @@ func buildPod(t *consolev1alpha1.Terminal) *corev1.Pod {
 		Spec: corev1.PodSpec{
 			ServiceAccountName:           serviceAccountName,
 			AutomountServiceAccountToken: ptr.To(false),
-			ImagePullSecrets:             []corev1.LocalObjectReference{{Name: imagePullSecretName}},
 			EnableServiceLinks:           ptr.To(false),
 			RestartPolicy:                corev1.RestartPolicyNever,
 			SecurityContext: &corev1.PodSecurityContext{
