@@ -37,7 +37,6 @@ func TestReconcileNamespaceRancherProjectID(t *testing.T) {
 
 	t.Run("sets the annotation without changing existing namespace metadata", func(t *testing.T) {
 		w, c, scheme := newNamespaceTest(t, testRancherProjectID)
-		w.Spec.LicenseInjection = true
 
 		reconcileNamespaceForTest(t, c, scheme, w)
 		namespace := getNamespaceForTest(t, c, w.Spec.Namespace)
@@ -50,7 +49,6 @@ func TestReconcileNamespaceRancherProjectID(t *testing.T) {
 			"pod-security.kubernetes.io/enforce": "baseline",
 			"pod-security.kubernetes.io/warn":    "restricted",
 			"pod-security.kubernetes.io/audit":   "restricted",
-			licenseInjectLabelKey:                "true",
 		} {
 			if got := namespace.Labels[key]; got != value {
 				t.Errorf("label %q = %q, want %q", key, got, value)
@@ -77,16 +75,51 @@ func TestReconcileNamespaceRancherProjectID(t *testing.T) {
 		}
 	})
 
-	t.Run("does not add the annotation for an empty spec", func(t *testing.T) {
+	t.Run("follows a changed global config value", func(t *testing.T) {
+		w, c, scheme := newNamespaceTest(t, testRancherProjectID)
+		reconcileNamespaceForTest(t, c, scheme, w)
+
+		cm := &corev1.ConfigMap{}
+		key := client.ObjectKey{Name: OperatorConfigName, Namespace: OperatorConfigNamespace}
+		if err := c.Get(context.Background(), key, cm); err != nil {
+			t.Fatalf("get global config: %v", err)
+		}
+		cm.Data[RancherProjectIDConfigKey] = "local:p-other"
+		if err := c.Update(context.Background(), cm); err != nil {
+			t.Fatalf("update global config: %v", err)
+		}
+
+		reconcileNamespaceForTest(t, c, scheme, w)
+		if got := getNamespaceForTest(t, c, w.Spec.Namespace).Annotations[rancherProjectIDAnnotation]; got != "local:p-other" {
+			t.Fatalf("annotation = %q, want %q", got, "local:p-other")
+		}
+	})
+
+	t.Run("does not add the annotation when the key is absent", func(t *testing.T) {
+		w, c, scheme := newNamespaceTest(t, "")
+		if err := c.Create(context.Background(), &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: OperatorConfigName, Namespace: OperatorConfigNamespace},
+			Data:       map[string]string{"ServiceEndpoint": "10.0.0.1"},
+		}); err != nil {
+			t.Fatalf("create global config: %v", err)
+		}
+
+		reconcileNamespaceForTest(t, c, scheme, w)
+		if _, ok := getNamespaceForTest(t, c, w.Spec.Namespace).Annotations[rancherProjectIDAnnotation]; ok {
+			t.Error("annotation was added without a RancherProjectID key")
+		}
+	})
+
+	t.Run("does not add the annotation when the global config is missing", func(t *testing.T) {
 		w, c, scheme := newNamespaceTest(t, "")
 		reconcileNamespaceForTest(t, c, scheme, w)
 
 		if _, ok := getNamespaceForTest(t, c, w.Spec.Namespace).Annotations[rancherProjectIDAnnotation]; ok {
-			t.Error("annotation was added for an empty Rancher Project ID")
+			t.Error("annotation was added without a configured Rancher Project ID")
 		}
 	})
 
-	t.Run("preserves an existing annotation for an empty spec", func(t *testing.T) {
+	t.Run("preserves an existing annotation when the global config is missing", func(t *testing.T) {
 		w, c, scheme := newNamespaceTest(t, "")
 		reconcileNamespaceForTest(t, c, scheme, w)
 
@@ -103,6 +136,9 @@ func TestReconcileNamespaceRancherProjectID(t *testing.T) {
 	})
 }
 
+// newNamespaceTest builds a Workspace and a fake client. A non-empty
+// rancherProjectID seeds the tenant-operator-config ConfigMap the operator
+// reads the value from; an empty one leaves the ConfigMap absent.
 func newNamespaceTest(t *testing.T, rancherProjectID string) (*tenantv1alpha1.Workspace, client.Client, *runtime.Scheme) {
 	t.Helper()
 
@@ -120,12 +156,22 @@ func newNamespaceTest(t *testing.T, rancherProjectID string) (*tenantv1alpha1.Wo
 			UID:  types.UID("workspace-a-uid"),
 		},
 		Spec: tenantv1alpha1.WorkspaceSpec{
-			Namespace:        "workspace-a",
-			RancherProjectID: rancherProjectID,
+			Namespace: "workspace-a",
 		},
 	}
 
-	return w, fake.NewClientBuilder().WithScheme(scheme).Build(), scheme
+	builder := fake.NewClientBuilder().WithScheme(scheme)
+	if rancherProjectID != "" {
+		builder = builder.WithObjects(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      OperatorConfigName,
+				Namespace: OperatorConfigNamespace,
+			},
+			Data: map[string]string{RancherProjectIDConfigKey: rancherProjectID},
+		})
+	}
+
+	return w, builder.Build(), scheme
 }
 
 func reconcileNamespaceForTest(t *testing.T, c client.Client, scheme *runtime.Scheme, w *tenantv1alpha1.Workspace) {

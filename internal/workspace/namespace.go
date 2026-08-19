@@ -32,8 +32,13 @@ import (
 )
 
 const (
-	licenseInjectLabelKey      = "license.phison.com/inject"
 	rancherProjectIDAnnotation = "field.cattle.io/projectId"
+
+	// RancherProjectIDConfigKey is the tenant-operator-config key carrying the
+	// Rancher Project ID, in "<cluster-id>:<project-id>" form. It is operator-wide
+	// configuration rather than a Workspace spec field, so every workspace
+	// namespace this operator manages joins the same Rancher Project.
+	RancherProjectIDConfigKey = "RancherProjectID"
 )
 
 // podSecurityLabels returns the Pod Security admission labels applied to every
@@ -66,6 +71,12 @@ func ReconcileNamespace(ctx context.Context, c client.Client, scheme *runtime.Sc
 		},
 	}
 
+	globalConfig, err := operatorConfigData(ctx, c)
+	if err != nil {
+		return err
+	}
+	rancherProjectID := globalConfig[RancherProjectIDConfigKey]
+
 	op, err := ctrlutil.CreateOrUpdate(ctx, c, namespace, func() error {
 		// Safety check: Prevent taking over existing namespaces not owned by us
 		if !IsOwned(namespace.OwnerReferences, w.UID) && !namespace.CreationTimestamp.IsZero() {
@@ -79,17 +90,11 @@ func ReconcileNamespace(ctx context.Context, c client.Client, scheme *runtime.Sc
 		maps.Copy(namespace.Labels, LabelsForWorkspace(w.Name, version))
 		maps.Copy(namespace.Labels, podSecurityLabels())
 
-		if w.Spec.LicenseInjection {
-			namespace.Labels[licenseInjectLabelKey] = "true"
-		} else {
-			delete(namespace.Labels, licenseInjectLabelKey)
-		}
-
-		if w.Spec.RancherProjectID != "" {
+		if rancherProjectID != "" {
 			if namespace.Annotations == nil {
 				namespace.Annotations = map[string]string{}
 			}
-			namespace.Annotations[rancherProjectIDAnnotation] = w.Spec.RancherProjectID
+			namespace.Annotations[rancherProjectIDAnnotation] = rancherProjectID
 		}
 
 		// Set OwnerReference to ensure garbage collection works
