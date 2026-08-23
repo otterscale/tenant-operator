@@ -38,19 +38,19 @@ func newConfigTestClient(t *testing.T, objects ...client.Object) client.Client {
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add core scheme: %v", err)
 	}
-	if err := gatewayv1.AddToScheme(scheme); err != nil {
+	if err := gatewayv1.Install(scheme); err != nil {
 		t.Fatalf("add gateway scheme: %v", err)
 	}
 	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
 }
 
-func platformGateway(name, namespace string, addresses ...string) *gatewayv1.Gateway {
+func platformGateway(namespace string, addresses ...string) *gatewayv1.Gateway {
 	specAddresses := make([]gatewayv1.GatewaySpecAddress, 0, len(addresses))
 	for _, address := range addresses {
 		specAddresses = append(specAddresses, gatewayv1.GatewaySpecAddress{Value: address})
 	}
 	return &gatewayv1.Gateway{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: PlatformGatewayName, Namespace: namespace},
 		Spec: gatewayv1.GatewaySpec{
 			GatewayClassName: "envoy",
 			Addresses:        specAddresses,
@@ -78,7 +78,7 @@ func TestResolveExternalAddress(t *testing.T) {
 	}{
 		{
 			name:        "single declared address",
-			objects:     []client.Object{platformGateway(PlatformGatewayName, PlatformGatewayNamespace, "10.102.197.202")},
+			objects:     []client.Object{platformGateway(PlatformGatewayNamespace, "10.102.197.202")},
 			wantAddress: "10.102.197.202",
 			wantErr:     errNone,
 		},
@@ -88,27 +88,27 @@ func TestResolveExternalAddress(t *testing.T) {
 		},
 		{
 			name:    "gateway declares no addresses",
-			objects: []client.Object{platformGateway(PlatformGatewayName, PlatformGatewayNamespace)},
+			objects: []client.Object{platformGateway(PlatformGatewayNamespace)},
 			wantErr: errUnusable,
 		},
 		{
 			name: "gateway declares an empty address value",
 			objects: []client.Object{
-				platformGateway(PlatformGatewayName, PlatformGatewayNamespace, ""),
+				platformGateway(PlatformGatewayNamespace, ""),
 			},
 			wantErr: errUnusable,
 		},
 		{
 			name: "gateway declares several addresses",
 			objects: []client.Object{
-				platformGateway(PlatformGatewayName, PlatformGatewayNamespace, "10.0.0.1", "10.0.0.2"),
+				platformGateway(PlatformGatewayNamespace, "10.0.0.1", "10.0.0.2"),
 			},
 			wantErr: errUnusable,
 		},
 		{
 			name: "same-named gateway in another namespace is ignored",
 			objects: []client.Object{
-				platformGateway(PlatformGatewayName, "kserve", "10.0.0.9"),
+				platformGateway("kserve", "10.0.0.9"),
 			},
 			wantErr: errNotFound,
 		},
@@ -189,7 +189,7 @@ func modelGateway(listeners ...gatewayv1.Listener) *gatewayv1.Gateway {
 func listener(protocol gatewayv1.ProtocolType, port int32, hostname *string) gatewayv1.Listener {
 	l := gatewayv1.Listener{
 		Name:     gatewayv1.SectionName(fmt.Sprintf("listener-%d", port)),
-		Port:     gatewayv1.PortNumber(port),
+		Port:     port,
 		Protocol: protocol,
 	}
 	if hostname != nil {
