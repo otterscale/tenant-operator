@@ -84,7 +84,7 @@ var _ = BeforeSuite(func() {
 	// Registered so the operator's Gateway lookup resolves the kind. The Gateway
 	// API CRDs are not installed in envtest, so the lookup reports a no-match
 	// error, which ReconcileConfig treats as "no model gateway".
-	err = gatewayv1.AddToScheme(scheme.Scheme)
+	err = gatewayv1.Install(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme

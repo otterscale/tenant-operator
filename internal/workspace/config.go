@@ -53,7 +53,7 @@ const (
 	// ModelGatewayNamespace and ModelGatewayName locate the KServe Gateway whose
 	// listeners define the model serving endpoint.
 	ModelGatewayNamespace = "kserve"
-	ModelGatewayName      = "kserve-ingress-gateway"
+	ModelGatewayName      = "kserve-gateway"
 )
 
 // modelGatewayProtocols are the listener protocols the model endpoint is derived

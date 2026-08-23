@@ -256,7 +256,7 @@ func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func gatewayAPIServed(mgr ctrl.Manager) bool {
 	_, err := mgr.GetRESTMapper().RESTMapping(
 		schema.GroupKind{Group: gatewayv1.GroupName, Kind: "Gateway"},
-		gatewayv1.SchemeGroupVersion.Version,
+		gatewayv1.GroupVersion.Version,
 	)
 	return err == nil
 }
