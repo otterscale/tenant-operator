@@ -17,8 +17,6 @@ limitations under the License.
 package main
 
 import (
-	"cmp"
-	"context"
 	"crypto/tls"
 	"flag"
 	"os"
@@ -27,13 +25,10 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -41,13 +36,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
-	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
+	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/otterscale/tenant-operator/internal/controller"
-	"github.com/otterscale/tenant-operator/internal/harbor"
 	webhookv1alpha1 "github.com/otterscale/tenant-operator/internal/webhook/v1alpha1"
-	"github.com/otterscale/tenant-operator/internal/workspace"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -57,17 +50,12 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 )
 
-const (
-	operatorNamespace      = "otterscale-system"
-	operatorServiceAccount = "tenant-operator-controller-manager"
-)
-
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
+	utilruntime.Must(tenantv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(sourcev1.AddToScheme(scheme))
 	utilruntime.Must(gatewayv1.Install(scheme))
-	utilruntime.Must(tenantv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -106,8 +94,6 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	setupLog.Info("Starting manager", "version", version)
-
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
 	// prevent from being vulnerable to the HTTP/2 Stream Cancellation and
@@ -142,7 +128,7 @@ func main() {
 
 	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
 	// More info:
-	// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.1/pkg/metrics/server
+	// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.24.1/pkg/metrics/server
 	// - https://book.kubebuilder.io/reference/metrics.html
 	metricsServerOptions := metricsserver.Options{
 		BindAddress:   metricsAddr,
@@ -154,7 +140,7 @@ func main() {
 		// FilterProvider is used to protect the metrics endpoint with authn/authz.
 		// These configurations ensure that only authorized users and service accounts
 		// can access the metrics endpoint. The RBAC are configured in 'config/rbac/kustomization.yaml'. More info:
-		// https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.1/pkg/metrics/filters#WithAuthenticationAndAuthorization
+		// https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.24.1/pkg/metrics/filters#WithAuthenticationAndAuthorization
 		metricsServerOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
 
@@ -199,52 +185,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Initialize Harbor integration from admin robot secret (if present).
-	podNamespace := cmp.Or(os.Getenv("POD_NAMESPACE"), operatorNamespace)
-
-	var harborClient harbor.Client
-	var harborURL string
-	adminSecret := &corev1.Secret{}
-	adminSecretKey := client.ObjectKey{
-		Namespace: podNamespace,
-		Name:      "otterscale-harbor-robot",
-	}
-	if err := mgr.GetAPIReader().Get(context.Background(), adminSecretKey, adminSecret); err != nil {
-		if apierrors.IsNotFound(err) {
-			setupLog.Info("Harbor admin secret not found, Harbor integration disabled")
-		} else {
-			setupLog.Error(err, "Failed to read Harbor admin secret")
-			os.Exit(1)
-		}
-	} else {
-		harborURL = string(adminSecret.Data["HARBOR_URL"])
-		harborRobotName := string(adminSecret.Data["HARBOR_ROBOT_NAME"])
-		harborRobotSecret := string(adminSecret.Data["HARBOR_ROBOT_SECRET"])
-		harborClient = harbor.NewClient(harborURL, harborRobotName, harborRobotSecret)
-		setupLog.Info("Harbor integration enabled", "url", harborURL)
-	}
-
 	if err := (&controller.WorkspaceReconciler{
-		Client:       mgr.GetClient(),
-		Scheme:       mgr.GetScheme(),
-		Version:      version,
-		Recorder:     mgr.GetEventRecorder("workspace-controller"),
-		HarborClient: harborClient,
-		HarborURL:    harborURL,
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Version:  version,
+		Recorder: mgr.GetEventRecorder("tenant.otterscale.io/workspace-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "Workspace")
 		os.Exit(1)
 	}
 	// nolint:goconst
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
-		// Construct the operator's service account identity from environment variables
-		// injected via the Kubernetes Downward API (see config/manager/manager.yaml).
-		// This allows the validating webhook to exempt the operator's own reconciliation
-		// updates regardless of the namespace it is deployed in.
-		podServiceAccount := cmp.Or(os.Getenv("POD_SERVICE_ACCOUNT"), operatorServiceAccount)
-		operatorSA := workspace.OperatorServiceAccountIdentity(podNamespace, podServiceAccount)
-
-		if err := webhookv1alpha1.SetupWorkspaceWebhookWithManager(mgr, operatorSA); err != nil {
+		if err := webhookv1alpha1.SetupWorkspaceWebhookWithManager(mgr); err != nil {
 			setupLog.Error(err, "Failed to create webhook", "webhook", "Workspace")
 			os.Exit(1)
 		}
