@@ -1,0 +1,5 @@
+# Manifests for the sample Workspace, applied with:
+#   kubectl apply -k config/samples/
+resources:
+- tenant_v1alpha1_workspace.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

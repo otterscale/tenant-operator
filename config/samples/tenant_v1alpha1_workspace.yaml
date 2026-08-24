@@ -1,0 +1,56 @@
+apiVersion: tenant.otterscale.io/v1alpha1
+kind: Workspace
+metadata:
+  labels:
+    app.kubernetes.io/name: tenant-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: workspace-sample
+spec:
+  # Target namespace for the workspace. Omit this field to let the mutating
+  # webhook generate a 6-character name. Once set it is immutable, and it must
+  # not collide with another Workspace or a reserved namespace.
+  namespace: team-alpha
+
+  # Members granted access to the workspace. At least one member must have the
+  # "admin" role, otherwise the resource is rejected at admission.
+  members:
+    - role: admin
+      subject: alice@example.com
+      name: Alice
+    - role: edit
+      subject: bob@example.com
+      name: Bob
+      # Harbor project member identity, set only when it differs from subject.
+      username: bob
+    - role: view
+      subject: system:serviceaccount:ci:reporter
+      serviceAccount: true
+
+  # Optional. Compute constraints applied to the workspace namespace.
+  resourceQuota:
+    hard:
+      requests.cpu: "4"
+      requests.memory: 8Gi
+      limits.cpu: "8"
+      limits.memory: 16Gi
+      persistentvolumeclaims: "10"
+
+  # Optional. Default and per-container resource bounds for pods in the namespace.
+  limitRange:
+    limits:
+      - type: Container
+        default:
+          cpu: 500m
+          memory: 512Mi
+        defaultRequest:
+          cpu: 100m
+          memory: 128Mi
+
+  # Optional. Applies a default-deny ingress NetworkPolicy, allowing traffic
+  # from the workspace itself plus the namespaces listed here.
+  # allowedNamespaces may only be set while enabled is true.
+  networkIsolation:
+    enabled: true
+    allowedNamespaces:
+      - istio-system
+      - monitoring
