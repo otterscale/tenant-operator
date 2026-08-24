@@ -109,8 +109,3 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
-
-// The API types live in a nested module so that consumers of the Workspace
-// types do not inherit the controller-runtime dependency tree. Released as
-// api/vX.Y.Z tags alongside the operator vX.Y.Z tags.
-replace github.com/otterscale/tenant-operator/api => ./api
