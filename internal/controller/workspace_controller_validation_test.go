@@ -197,8 +197,6 @@ var _ = Describe("Workspace Controller - CEL Validation", func() {
 	})
 
 	Context("Admission Policy - Update/Delete Authorization", func() {
-		const controllerServiceAccount = "system:serviceaccount:otterscale-system:tenant-operator-controller-manager"
-
 		BeforeEach(func() {
 			workspace = &tenantv1alpha1.Workspace{
 				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
@@ -210,17 +208,6 @@ var _ = Describe("Workspace Controller - CEL Validation", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, workspace)).To(Succeed())
-		})
-
-		It("should allow controller service account to update workspace", func() {
-			saClient := createImpersonatedClient(controllerServiceAccount, nil)
-
-			nsName := types.NamespacedName{Name: resourceName}
-			var w tenantv1alpha1.Workspace
-			Expect(k8sClient.Get(ctx, nsName, &w)).To(Succeed())
-
-			w.Spec.NetworkIsolation.Enabled = true
-			Expect(saClient.Update(ctx, &w)).To(Succeed())
 		})
 
 		It("should allow system:masters to update workspace", func() {

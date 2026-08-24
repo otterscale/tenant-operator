@@ -29,14 +29,6 @@ import (
 	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
 )
 
-// OperatorServiceAccountIdentity constructs the full Kubernetes service account
-// identity string from the pod namespace and service account name.
-// Example: OperatorServiceAccountIdentity("otterscale-system", "controller-manager")
-// returns "system:serviceaccount:otterscale-system:controller-manager".
-func OperatorServiceAccountIdentity(namespace, saName string) string {
-	return "system:serviceaccount:" + namespace + ":" + saName
-}
-
 // privilegedGroups are Kubernetes groups that bypass all workspace-level
 // authorization checks (cluster super-admins).
 var privilegedGroups = []string{"system:masters", "kubeadm:cluster-admins"}
@@ -49,16 +41,15 @@ var privilegedClusterRoles = []string{"cluster-admin"}
 // Workspace. Non-privileged callers must list themselves as an admin member of
 // the new Workspace.
 //
-// Privileged callers (group, operator SA, or cluster-admin ClusterRole holders)
-// bypass the self-admin requirement.
+// Privileged callers (group or cluster-admin ClusterRole holders) bypass the
+// self-admin requirement.
 //
 // Allowed callers (checked cheapest-first):
 //   - Members of a privileged group (system:masters, kubeadm:cluster-admins)
-//   - The operator's own ServiceAccount (operatorSA)
 //   - A user who is listed as an "admin" member in the new workspace
 //   - A user bound to a privileged ClusterRole (e.g. cluster-admin) via ClusterRoleBinding
-func AuthorizeCreation(ctx context.Context, reader client.Reader, userInfo authenticationv1.UserInfo, ws *tenantv1alpha1.Workspace, operatorSA string) error {
-	if inPrivilegedGroup(userInfo) || userInfo.Username == operatorSA {
+func AuthorizeCreation(ctx context.Context, reader client.Reader, userInfo authenticationv1.UserInfo, ws *tenantv1alpha1.Workspace) error {
+	if inPrivilegedGroup(userInfo) {
 		return nil
 	}
 
@@ -84,21 +75,16 @@ func AuthorizeCreation(ctx context.Context, reader client.Reader, userInfo authe
 // approve in the same request.
 //
 // reader is used to list ClusterRoleBindings for privileged ClusterRole checks.
-// operatorSA is the full service account identity of the controller-manager
-// (e.g. "system:serviceaccount:otterscale-system:tenant-operator-controller-manager").
-// It is provided at startup so the operator works regardless of the namespace it is deployed in.
 //
 // Allowed callers (checked cheapest-first):
 //   - Members of a privileged group (system:masters, kubeadm:cluster-admins)
-//   - The operator's own ServiceAccount (operatorSA)
 //   - A workspace member whose role is "admin" in the current (old) spec
 //   - A user bound to a privileged ClusterRole (e.g. cluster-admin) via ClusterRoleBinding
-func AuthorizeModification(ctx context.Context, reader client.Reader, userInfo authenticationv1.UserInfo, workspace *tenantv1alpha1.Workspace, operatorSA string) error {
+//
+// The operator itself needs no exemption here: it only ever patches the
+// workspaces/status subresource, which this webhook does not intercept.
+func AuthorizeModification(ctx context.Context, reader client.Reader, userInfo authenticationv1.UserInfo, workspace *tenantv1alpha1.Workspace) error {
 	if inPrivilegedGroup(userInfo) {
-		return nil
-	}
-
-	if userInfo.Username == operatorSA {
 		return nil
 	}
 
