@@ -68,6 +68,9 @@ var _ = Describe("Manager", Ordered, func() {
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
 
+		By("installing the third-party CRDs the operator requires")
+		Expect(utils.InstallThirdPartyCRDs()).To(Succeed(), "Failed to install third-party CRDs")
+
 		By("deploying the controller-manager")
 		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage))
 		_, err = utils.Run(cmd)
@@ -77,8 +80,15 @@ var _ = Describe("Manager", Ordered, func() {
 	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
 	// and deleting the namespace.
 	AfterAll(func() {
+		// Cluster-scoped, so deleting the namespace does not reclaim it. Left
+		// behind, it makes the next run on the same cluster fail at creation.
+		By("cleaning up the ClusterRoleBinding for metrics access")
+		cmd := exec.Command("kubectl", "delete", "clusterrolebinding", metricsRoleBindingName,
+			"--ignore-not-found")
+		_, _ = utils.Run(cmd)
+
 		By("cleaning up the curl pod for metrics")
-		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
+		cmd = exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
 		_, _ = utils.Run(cmd)
 
 		By("undeploying the controller-manager")
@@ -88,6 +98,9 @@ var _ = Describe("Manager", Ordered, func() {
 		By("uninstalling CRDs")
 		cmd = exec.Command("make", "uninstall")
 		_, _ = utils.Run(cmd)
+
+		By("uninstalling the third-party CRDs")
+		utils.UninstallThirdPartyCRDs()
 
 		By("removing manager namespace")
 		cmd = exec.Command("kubectl", "delete", "ns", namespace)

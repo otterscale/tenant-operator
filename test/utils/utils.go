@@ -33,6 +33,11 @@ const (
 
 	defaultKindBinary  = "kind"
 	defaultKindCluster = "kind"
+
+	// thirdPartyCRDDir holds the CRDs owned by other projects that the operator
+	// requires the cluster to serve. Relative to the project directory Run
+	// executes commands in.
+	thirdPartyCRDDir = "test/crd"
 )
 
 func warnError(err error) {
@@ -131,6 +136,32 @@ func IsCertManagerCRDsInstalled() bool {
 	}
 
 	return false
+}
+
+// InstallThirdPartyCRDs installs the third-party CRDs the operator requires —
+// Flux's HelmRepository and the Gateway API's Gateway. SetupWithManager refuses
+// to start unless the cluster serves both, so the manager crash-loops without
+// them. See test/crd/README.md to refresh the copies.
+func InstallThirdPartyCRDs() error {
+	cmd := exec.Command("kubectl", "apply", "-f", thirdPartyCRDDir)
+	if _, err := Run(cmd); err != nil {
+		return err
+	}
+
+	// The operator reads the RESTMapper once at startup, so the kinds have to be
+	// served before the manager is deployed, not merely accepted by the API server.
+	cmd = exec.Command("kubectl", "wait", "--for", "condition=Established",
+		"-f", thirdPartyCRDDir, "--timeout", "2m")
+	_, err := Run(cmd)
+	return err
+}
+
+// UninstallThirdPartyCRDs removes the CRDs installed by InstallThirdPartyCRDs.
+func UninstallThirdPartyCRDs() {
+	cmd := exec.Command("kubectl", "delete", "-f", thirdPartyCRDDir, "--ignore-not-found")
+	if _, err := Run(cmd); err != nil {
+		warnError(err)
+	}
 }
 
 // LoadImageToKindClusterWithName loads a local docker image to the kind cluster
