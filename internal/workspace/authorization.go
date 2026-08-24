@@ -111,7 +111,7 @@ func hasPrivilegedClusterRole(ctx context.Context, reader client.Reader, userInf
 
 	for i := range bindings.Items {
 		b := &bindings.Items[i]
-		if b.RoleRef.Kind != "ClusterRole" || !slices.Contains(privilegedClusterRoles, b.RoleRef.Name) {
+		if b.RoleRef.Kind != clusterRoleKind || !slices.Contains(privilegedClusterRoles, b.RoleRef.Name) {
 			continue
 		}
 		for _, subject := range b.Subjects {

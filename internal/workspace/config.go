@@ -37,13 +37,12 @@ import (
 )
 
 const (
-	// OperatorConfigNamespace and OperatorConfigName locate the operator-wide
-	// ConfigMap holding settings that cannot be discovered from the cluster
-	// (see RancherProjectIDConfigKey). Everything the operator publishes to
-	// workspaces is derived from the cluster itself, so this ConfigMap is not
-	// copied into any workspace.
-	OperatorConfigNamespace = "otterscale-system"
-	OperatorConfigName      = "tenant-operator-config"
+	// OperatorConfigName is the operator-wide ConfigMap, in OperatorNamespace,
+	// holding settings that cannot be discovered from the cluster (see
+	// RancherProjectIDKey). Everything the operator publishes to workspaces is
+	// derived from the cluster itself, so this ConfigMap is not copied into any
+	// workspace. Unlike the Harbor credentials Secret it is optional.
+	OperatorConfigName = "tenant-operator-config"
 
 	// PlatformGatewayNamespace and PlatformGatewayName locate the Gateway whose
 	// spec.addresses carry the address clients outside the cluster connect to.
@@ -155,7 +154,7 @@ func deleteConfig(ctx context.Context, c client.Client, w *tenantv1alpha1.Worksp
 // can treat "not configured" and "configured with nothing" identically.
 func operatorConfigData(ctx context.Context, c client.Client) (map[string]string, error) {
 	var cm corev1.ConfigMap
-	key := types.NamespacedName{Name: OperatorConfigName, Namespace: OperatorConfigNamespace}
+	key := types.NamespacedName{Name: OperatorConfigName, Namespace: OperatorNamespace}
 	if err := c.Get(ctx, key, &cm); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, nil
@@ -163,6 +162,16 @@ func operatorConfigData(ctx context.Context, c client.Client) (map[string]string
 		return nil, err
 	}
 	return cm.Data, nil
+}
+
+// IsOperatorConfig reports whether obj is the operator-wide ConfigMap holding
+// the settings the operator cannot discover from the cluster.
+func IsOperatorConfig(obj client.Object) bool {
+	if obj == nil {
+		return false
+	}
+	return obj.GetName() == OperatorConfigName &&
+		obj.GetNamespace() == OperatorNamespace
 }
 
 // IsEndpointSourceGateway reports whether obj is one of the Gateways the

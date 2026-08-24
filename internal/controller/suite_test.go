@@ -29,6 +29,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -44,6 +46,7 @@ import (
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
 	webhooktenantv1alpha1 "github.com/otterscale/tenant-operator/internal/webhook/v1alpha1"
+	ws "github.com/otterscale/tenant-operator/internal/workspace"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	// +kubebuilder:scaffold:imports
@@ -81,9 +84,6 @@ var _ = BeforeSuite(func() {
 	err = sourcev1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
-	// Registered so the operator's Gateway lookup resolves the kind. The Gateway
-	// API CRDs are not installed in envtest, so the lookup reports a no-match
-	// error, which ReconcileConfig treats as "no model gateway".
 	err = gatewayv1.Install(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
@@ -91,7 +91,13 @@ var _ = BeforeSuite(func() {
 
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
+		CRDDirectoryPaths: []string{
+			filepath.Join("..", "..", "config", "crd", "bases"),
+			// Third-party CRDs the operator requires: Flux's HelmRepository and
+			// the Gateway API's Gateway. SetupWithManager refuses to start without
+			// them — see test/crd/README.md to refresh the copies.
+			filepath.Join("..", "..", "test", "crd"),
+		},
 		ErrorIfCRDPathMissing: true,
 		WebhookInstallOptions: envtest.WebhookInstallOptions{
 			Paths: []string{filepath.Join("..", "..", "config", "webhook")},
@@ -149,6 +155,24 @@ var _ = BeforeSuite(func() {
 
 	applyManifest(filepath.Join("..", "..", "config", "rbac", "workspace_editor_role.yaml"))
 	applyManifest(filepath.Join("..", "..", "config", "rbac", "workspace_binding.yaml"))
+
+	// The Harbor credentials Secret is a deployment prerequisite: without it
+	// reconcile fails before it reaches any other resource. Specs pair this with
+	// a fake harbor.Client, so the values themselves are never dialled.
+	Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: ws.OperatorNamespace},
+	}))).To(Succeed())
+	Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ws.OperatorSecretName,
+			Namespace: ws.OperatorNamespace,
+		},
+		Data: map[string][]byte{
+			ws.HarborURLKey:         []byte("https://harbor.example.com"),
+			ws.HarborRobotNameKey:   []byte("robot$otterscale"),
+			ws.HarborRobotSecretKey: []byte("fake-admin-secret"),
+		},
+	}))).To(Succeed())
 })
 
 var _ = AfterSuite(func() {

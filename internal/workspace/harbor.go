@@ -24,7 +24,6 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -37,13 +36,15 @@ import (
 )
 
 const (
-	// OperatorSecretNamespace and OperatorSecretName locate the operator-wide
-	// Secret holding the Harbor admin robot credentials. Like the
-	// tenant-operator-config ConfigMap this is operator-wide configuration read
-	// from the cluster at reconcile time, so rotating it takes effect without
+	// OperatorSecretName is the operator-wide Secret, in OperatorNamespace,
+	// holding the Harbor admin robot credentials. It is read from the cluster on
+	// every reconcile, so rotating the credentials takes effect without
 	// restarting the operator.
-	OperatorSecretNamespace = "otterscale-system"
-	OperatorSecretName      = "tenant-operator-secret"
+	//
+	// Unlike the tenant-operator-config ConfigMap, which is optional, this Secret
+	// is a deployment prerequisite: every workspace gets a Harbor project, so
+	// there is no "Harbor disabled" mode to fall back to.
+	OperatorSecretName = "tenant-operator-secret"
 
 	// HarborURLKey, HarborRobotNameKey and HarborRobotSecretKey are the
 	// OperatorSecretName keys carrying the Harbor admin robot credentials.
@@ -63,23 +64,18 @@ type HarborCredentials struct {
 // OperatorHarborCredentials returns the Harbor credentials held by the
 // operator-wide tenant-operator-secret.
 //
-// A missing Secret is not an error: it returns nil so callers can treat "not
-// configured" as "Harbor integration disabled", the same way operatorConfigData
-// treats a missing tenant-operator-config ConfigMap.
-//
-// A Secret that exists but does not carry every key is reported as an error
-// instead — that is a misconfiguration rather than an opt-out, and silently
-// degrading to a half-configured Harbor client would surface later as opaque
-// request failures against every workspace.
+// The Secret is a deployment prerequisite, not an opt-in, so both a missing
+// Secret and one that does not carry every key are reported as errors. Reconcile
+// surfaces the failure on the Workspace as Ready=False and retries; the watch on
+// the Secret picks the credentials up as soon as they are in place. Degrading to
+// a half-configured — or entirely unconfigured — Harbor client would instead
+// leave workspaces silently missing their registry access.
 func OperatorHarborCredentials(ctx context.Context, c client.Client) (*HarborCredentials, error) {
-	key := types.NamespacedName{Name: OperatorSecretName, Namespace: OperatorSecretNamespace}
+	key := types.NamespacedName{Name: OperatorSecretName, Namespace: OperatorNamespace}
 
 	var secret corev1.Secret
 	if err := c.Get(ctx, key, &secret); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
+		return nil, fmt.Errorf("reading Harbor credentials from Secret %s: %w", key, err)
 	}
 
 	creds := &HarborCredentials{
@@ -108,14 +104,14 @@ func OperatorHarborCredentials(ctx context.Context, c client.Client) (*HarborCre
 	return creds, nil
 }
 
-// IsOperatorHarborSecret reports whether obj is the operator-wide Secret holding
+// IsOperatorSecret reports whether obj is the operator-wide Secret holding
 // the Harbor admin robot credentials.
-func IsOperatorHarborSecret(obj client.Object) bool {
+func IsOperatorSecret(obj client.Object) bool {
 	if obj == nil {
 		return false
 	}
 	return obj.GetName() == OperatorSecretName &&
-		obj.GetNamespace() == OperatorSecretNamespace
+		obj.GetNamespace() == OperatorNamespace
 }
 
 // ReconcileHarbor ensures the Harbor project, robot account, docker-registry Secret,
@@ -217,30 +213,45 @@ func ReconcileHarbor(
 	return missingMembers, nil
 }
 
-// ensureImagePullSecret patches the default ServiceAccount to include the workspace image pull secret.
+// defaultServiceAccountName is the ServiceAccount Kubernetes assigns to pods
+// that do not name one, so listing the image pull Secret on it makes the
+// workspace registry reachable by default.
+const defaultServiceAccountName = "default"
+
+// ensureImagePullSecret lists the workspace image pull Secret on the namespace's
+// default ServiceAccount.
+//
+// Kubernetes creates that ServiceAccount asynchronously, so on a namespace this
+// reconcile only just created it may not exist yet. It is created here instead of
+// failing the reconcile: Kubernetes considers a namespace with an existing
+// default ServiceAccount satisfied and will not add a second one. No owner
+// reference is set — the ServiceAccount belongs to the namespace, not to us.
 func ensureImagePullSecret(ctx context.Context, c client.Client, namespace string) error {
-	sa := &corev1.ServiceAccount{}
-	if err := c.Get(ctx, types.NamespacedName{Name: "default", Namespace: namespace}, sa); err != nil {
-		return err
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      defaultServiceAccountName,
+			Namespace: namespace,
+		},
 	}
 
-	// Check if already present
-	for _, ref := range sa.ImagePullSecrets {
-		if ref.Name == ImagePullSecretName {
-			return nil
+	op, err := ctrlutil.CreateOrUpdate(ctx, c, sa, func() error {
+		for _, ref := range sa.ImagePullSecrets {
+			if ref.Name == ImagePullSecretName {
+				return nil
+			}
 		}
-	}
-
-	// Patch to add the image pull secret
-	patch := client.MergeFrom(sa.DeepCopy())
-	sa.ImagePullSecrets = append(sa.ImagePullSecrets, corev1.LocalObjectReference{
-		Name: ImagePullSecretName,
+		sa.ImagePullSecrets = append(sa.ImagePullSecrets, corev1.LocalObjectReference{
+			Name: ImagePullSecretName,
+		})
+		return nil
 	})
-	if err := c.Patch(ctx, sa, patch); err != nil {
+	if err != nil {
 		return err
 	}
-
-	log.FromContext(ctx).Info("Default ServiceAccount patched with imagePullSecrets", "namespace", namespace)
+	if op != ctrlutil.OperationResultNone {
+		log.FromContext(ctx).Info("Default ServiceAccount reconciled with imagePullSecrets",
+			"namespace", namespace, "operation", op)
+	}
 	return nil
 }
 

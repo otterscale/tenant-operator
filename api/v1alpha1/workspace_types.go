@@ -24,6 +24,12 @@ import (
 
 // MemberRole defines the role of a member in the workspace.
 // It determines the RBAC permissions granted within the target namespace.
+//
+// Each role name is also the name of the ClusterRole bound in the workspace
+// namespace, so adding a role means updating three places that cannot be derived
+// from these constants: the Enum marker below, the controller's
+// +kubebuilder:rbac clusterroles/bind resourceNames, and harborRoleID's mapping
+// onto Harbor project roles.
 // +kubebuilder:validation:Enum=admin;edit;view
 // +enum
 type MemberRole string
@@ -36,6 +42,13 @@ const (
 	// MemberRoleView has read-only access to resources.
 	MemberRoleView MemberRole = "view"
 )
+
+// AllMemberRoles returns every MemberRole, ordered from most to least
+// privileged. Callers that need to act on all roles iterate this rather than
+// restating the list, so the enumeration lives in one place.
+func AllMemberRoles() []MemberRole {
+	return []MemberRole{MemberRoleAdmin, MemberRoleEdit, MemberRoleView}
+}
 
 // WorkspaceMember defines a single member entity associated with a workspace.
 type WorkspaceMember struct {
