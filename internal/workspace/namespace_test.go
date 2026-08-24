@@ -27,7 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
+	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
 )
 
 const testRancherProjectID = "c-m-abcde:p-vwxyz"
@@ -80,11 +80,11 @@ func TestReconcileNamespaceRancherProjectID(t *testing.T) {
 		reconcileNamespaceForTest(t, c, scheme, w)
 
 		cm := &corev1.ConfigMap{}
-		key := client.ObjectKey{Name: OperatorConfigName, Namespace: OperatorConfigNamespace}
+		key := client.ObjectKey{Name: OperatorConfigName, Namespace: OperatorNamespace}
 		if err := c.Get(context.Background(), key, cm); err != nil {
 			t.Fatalf("get global config: %v", err)
 		}
-		cm.Data[RancherProjectIDConfigKey] = "local:p-other"
+		cm.Data[RancherProjectIDKey] = "local:p-other"
 		if err := c.Update(context.Background(), cm); err != nil {
 			t.Fatalf("update global config: %v", err)
 		}
@@ -98,7 +98,7 @@ func TestReconcileNamespaceRancherProjectID(t *testing.T) {
 	t.Run("does not add the annotation when the key is absent", func(t *testing.T) {
 		w, c, scheme := newNamespaceTest(t, "")
 		if err := c.Create(context.Background(), &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Name: OperatorConfigName, Namespace: OperatorConfigNamespace},
+			ObjectMeta: metav1.ObjectMeta{Name: OperatorConfigName, Namespace: OperatorNamespace},
 			Data:       map[string]string{"ServiceEndpoint": "10.0.0.1"},
 		}); err != nil {
 			t.Fatalf("create global config: %v", err)
@@ -165,9 +165,9 @@ func newNamespaceTest(t *testing.T, rancherProjectID string) (*tenantv1alpha1.Wo
 		builder = builder.WithObjects(&corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      OperatorConfigName,
-				Namespace: OperatorConfigNamespace,
+				Namespace: OperatorNamespace,
 			},
-			Data: map[string]string{RancherProjectIDConfigKey: rancherProjectID},
+			Data: map[string]string{RancherProjectIDKey: rancherProjectID},
 		})
 	}
 

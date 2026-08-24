@@ -32,12 +32,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
+	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
 
 	"github.com/otterscale/tenant-operator/internal/workspace"
 )
-
-const testOperatorSA = "system:serviceaccount:test-system:test-controller-manager"
 
 func newWorkspace(members []tenantv1alpha1.WorkspaceMember) *tenantv1alpha1.Workspace {
 	return newWorkspaceWithName("test-workspace", "test-ns", members)
@@ -66,15 +64,6 @@ func newFakeReader(objs ...runtime.Object) client.Reader {
 	_ = tenantv1alpha1.AddToScheme(s)
 	return fake.NewClientBuilder().WithScheme(s).WithRuntimeObjects(objs...).Build()
 }
-
-// ---------------------------------------------------------------------------
-
-var _ = Describe("OperatorServiceAccountIdentity", func() {
-	It("should compose the canonical service account username", func() {
-		got := workspace.OperatorServiceAccountIdentity("otterscale-system", "tenant-operator-controller-manager")
-		Expect(got).To(Equal("system:serviceaccount:otterscale-system:tenant-operator-controller-manager"))
-	})
-})
 
 // ---------------------------------------------------------------------------
 // AuthorizeCreation
@@ -110,7 +99,7 @@ var _ = Describe("AuthorizeCreation", func() {
 
 		DescribeTable("should allow or deny based on caller identity",
 			func(user authenticationv1.UserInfo, shouldSucceed bool) {
-				err := workspace.AuthorizeCreation(ctx, reader, user, ws, testOperatorSA)
+				err := workspace.AuthorizeCreation(ctx, reader, user, ws)
 				if shouldSucceed {
 					Expect(err).NotTo(HaveOccurred())
 				} else {
@@ -119,8 +108,6 @@ var _ = Describe("AuthorizeCreation", func() {
 			},
 			Entry("privileged group bypasses all checks",
 				authenticationv1.UserInfo{Username: "any-user", Groups: []string{"system:masters"}}, true),
-			Entry("operator SA bypasses all checks",
-				authenticationv1.UserInfo{Username: testOperatorSA}, true),
 			Entry("creator listed as admin is allowed",
 				authenticationv1.UserInfo{Username: "alice"}, true),
 			Entry("user bound to cluster-admin is allowed even without admin role",
@@ -184,7 +171,7 @@ var _ = Describe("AuthorizeModification", func() {
 
 		DescribeTable("should allow or deny based on caller identity",
 			func(user authenticationv1.UserInfo, shouldSucceed bool) {
-				err := workspace.AuthorizeModification(ctx, reader, user, ws, testOperatorSA)
+				err := workspace.AuthorizeModification(ctx, reader, user, ws)
 				if shouldSucceed {
 					Expect(err).NotTo(HaveOccurred())
 				} else {
@@ -198,9 +185,6 @@ var _ = Describe("AuthorizeModification", func() {
 				authenticationv1.UserInfo{Username: "any-user", Groups: []string{"kubeadm:cluster-admins"}}, true),
 			Entry("privileged group among other groups",
 				authenticationv1.UserInfo{Username: "any-user", Groups: []string{"dev-team", "system:masters", "ops"}}, true),
-			// Operator SA
-			Entry("operator service account is allowed",
-				authenticationv1.UserInfo{Username: testOperatorSA}, true),
 			// Workspace admin
 			Entry("workspace admin member is allowed",
 				authenticationv1.UserInfo{Username: "alice"}, true),
@@ -235,7 +219,7 @@ var _ = Describe("AuthorizeModification", func() {
 		})
 
 		It("should deny a regular user", func() {
-			err := workspace.AuthorizeModification(ctx, reader, authenticationv1.UserInfo{Username: "alice"}, ws, testOperatorSA)
+			err := workspace.AuthorizeModification(ctx, reader, authenticationv1.UserInfo{Username: "alice"}, ws)
 			Expect(err).To(HaveOccurred())
 		})
 
@@ -243,7 +227,7 @@ var _ = Describe("AuthorizeModification", func() {
 			err := workspace.AuthorizeModification(ctx, reader, authenticationv1.UserInfo{
 				Username: "admin",
 				Groups:   []string{"system:masters"},
-			}, ws, testOperatorSA)
+			}, ws)
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})
@@ -264,7 +248,7 @@ var _ = Describe("AuthorizeModification", func() {
 			reader := newFakeReader(binding)
 			ws := newWorkspace(nil)
 
-			err := workspace.AuthorizeModification(context.Background(), reader, authenticationv1.UserInfo{Username: "tricky-user"}, ws, testOperatorSA)
+			err := workspace.AuthorizeModification(context.Background(), reader, authenticationv1.UserInfo{Username: "tricky-user"}, ws)
 			Expect(err).To(HaveOccurred())
 		})
 	})

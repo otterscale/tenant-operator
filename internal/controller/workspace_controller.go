@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -27,6 +28,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -48,7 +50,7 @@ import (
 	"k8s.io/client-go/tools/events"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
+	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
 	"github.com/otterscale/tenant-operator/internal/harbor"
 	"github.com/otterscale/tenant-operator/internal/workspace"
 )
@@ -61,11 +63,24 @@ import (
 // while the actual resource synchronization logic resides in internal/workspace/.
 type WorkspaceReconciler struct {
 	client.Client
-	Scheme       *runtime.Scheme
-	Version      string
-	Recorder     events.EventRecorder
-	HarborClient harbor.Client // nil disables Harbor integration
-	HarborURL    string
+	Scheme   *runtime.Scheme
+	Version  string
+	Recorder events.EventRecorder
+
+	// NewHarborClient builds the Harbor API client from the credentials found in
+	// the operator-wide Secret. Defaults to harbor.NewClient when unset; tests
+	// substitute a fake so reconciliation can run without a Harbor server.
+	NewHarborClient func(baseURL, username, password string) harbor.Client
+}
+
+// harborClient builds the Harbor API client for the given credentials, falling
+// back to the real HTTP client when no factory was injected.
+func (r *WorkspaceReconciler) harborClient(creds *workspace.HarborCredentials) harbor.Client {
+	newClient := r.NewHarborClient
+	if newClient == nil {
+		newClient = harbor.NewClient
+	}
+	return newClient(creds.URL, creds.RobotName, creds.RobotSecret)
 }
 
 // RBAC Permissions required by the controller:
@@ -138,20 +153,21 @@ func (r *WorkspaceReconciler) reconcileResources(ctx context.Context, w *tenantv
 	if err := workspace.ReconcileNamespace(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
 		return nil, err
 	}
-	if err := workspace.ReconcileServiceAccount(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
+	// The Harbor credentials are read here rather than at startup so rotating
+	// them takes effect on the next reconcile instead of requiring a restart.
+	creds, err := workspace.OperatorHarborCredentials(ctx, r.Client)
+	if err != nil {
 		return nil, err
 	}
-	var missingHarborMembers []string
-	if r.HarborClient != nil {
-		missing, err := workspace.ReconcileHarbor(ctx, r.Client, r.Scheme, w, r.Version, r.HarborClient, r.HarborURL)
-		if err != nil {
-			return nil, err
-		}
-		missingHarborMembers = missing
-		if err := workspace.ReconcileHelmRepository(ctx, r.Client, r.Scheme, w, r.Version, r.HarborURL); err != nil {
-			return nil, err
-		}
+	missingHarborMembers, err := workspace.ReconcileHarbor(
+		ctx, r.Client, r.Scheme, w, r.Version, r.harborClient(creds), creds.URL)
+	if err != nil {
+		return nil, err
 	}
+	if err := workspace.ReconcileHelmRepository(ctx, r.Client, r.Scheme, w, r.Version, creds.URL); err != nil {
+		return nil, err
+	}
+
 	if err := workspace.ReconcileRoleBindings(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
 		return nil, err
 	}
@@ -186,10 +202,34 @@ func (r *WorkspaceReconciler) handleReconcileError(ctx context.Context, w *tenan
 		return ctrl.Result{}, nil
 	}
 
-	// Transient error: update status and requeue
+	// Transient error: surface it on the status, then hand the original error back
+	// so controller-runtime retries with backoff. A failed status patch is
+	// deliberately dropped here — unlike the permanent case above there is
+	// already a retry coming, and reporting the patch error instead would lose
+	// the reason the reconcile actually failed.
 	_ = r.setReadyConditionFalse(ctx, w, "ReconcileError", err.Error())
 	r.Recorder.Eventf(w, nil, corev1.EventTypeWarning, "ReconcileError", "Reconcile", err.Error())
 	return ctrl.Result{}, err
+}
+
+// observedRef returns a reference to name/namespace once that object is actually
+// present, so the status does not advertise a resource that is not there.
+//
+// obj is only a typed container for the lookup; its contents are not used. A
+// missing object yields a nil reference, while any other API failure is returned
+// so the caller retries instead of clearing the reference on a transient error.
+func (r *WorkspaceReconciler) observedRef(
+	ctx context.Context,
+	obj client.Object,
+	name, namespace string,
+) (*tenantv1alpha1.ResourceReference, error) {
+	if err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, obj); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("observing %s/%s: %w", namespace, name, err)
+	}
+	return &tenantv1alpha1.ResourceReference{Name: name, Namespace: namespace}, nil
 }
 
 // setReadyConditionFalse updates the Ready condition to False via status patch.
@@ -212,9 +252,47 @@ func (r *WorkspaceReconciler) setReadyConditionFalse(ctx context.Context, w *ten
 	return nil
 }
 
+// requiredKind is an external kind the operator cannot work without, paired with
+// the component that provides it so a missing CRD can be reported by name.
+type requiredKind struct {
+	provider string
+	gvk      schema.GroupVersionKind
+}
+
+// requiredKinds lists those kinds. Every workspace is given a HelmRepository and
+// its service endpoints are derived from Gateways, so a cluster missing either
+// API cannot serve a single workspace.
+func requiredKinds() []requiredKind {
+	return []requiredKind{
+		{
+			provider: "Flux source-controller",
+			gvk:      sourcev1.GroupVersion.WithKind("HelmRepository"),
+		},
+		{
+			provider: "Gateway API",
+			gvk: schema.GroupVersionKind{
+				Group:   gatewayv1.GroupName,
+				Version: gatewayv1.GroupVersion.Version,
+				Kind:    "Gateway",
+			},
+		},
+	}
+}
+
 // SetupWithManager registers the controller with the Manager and defines watches.
 func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	b := ctrl.NewControllerManagedBy(mgr).
+	// Checked before the builder so the operator names the missing prerequisite
+	// itself. A watch on a kind the cluster does not serve would otherwise fail
+	// while its informer starts, reporting an unknown kind without saying it is
+	// required, and taking the whole manager — webhooks included — down with it.
+	for _, required := range requiredKinds() {
+		if !kindServed(mgr, required.gvk) {
+			return fmt.Errorf("%s is not served by the cluster: the %s CRDs are required by the tenant operator",
+				required.gvk, required.provider)
+		}
+	}
+
+	return ctrl.NewControllerManagedBy(mgr).
 		For(&tenantv1alpha1.Workspace{},
 			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
@@ -223,125 +301,115 @@ func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.LimitRange{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Secret{}).
-		Owns(&corev1.ServiceAccount{}).
 		Owns(&rbacv1.RoleBinding{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&sourcev1.HelmRepository{}).
 		Watches(
 			&corev1.ConfigMap{},
-			handler.EnqueueRequestsFromMapFunc(r.findWorkspacesForOperatorConfig),
+			handler.EnqueueRequestsFromMapFunc(r.enqueueAllWorkspacesIf(workspace.IsOperatorConfig)),
 			builder.WithPredicates(operatorConfigChangedPredicate()),
-		)
-
-	// The Gateway API is optional. Without its CRDs the informer would fail to
-	// start and take the whole manager down, so only watch Gateways when the kind
-	// is actually served — ReconcileConfig already degrades to "no endpoints" there.
-	if gatewayAPIServed(mgr) {
-		b = b.Watches(
+		).
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(r.enqueueAllWorkspacesIf(workspace.IsOperatorSecret)),
+			builder.WithPredicates(operatorSecretChangedPredicate()),
+		).
+		Watches(
 			&gatewayv1.Gateway{},
-			handler.EnqueueRequestsFromMapFunc(r.findWorkspacesForGateway),
+			handler.EnqueueRequestsFromMapFunc(r.enqueueAllWorkspacesIf(workspace.IsEndpointSourceGateway)),
 			builder.WithPredicates(gatewayChangedPredicate()),
-		)
-	} else {
-		mgr.GetLogger().Info("Gateway API not served by the cluster, " +
-			"workspace endpoints will not react to Gateway changes")
-	}
-
-	return b.Named("workspace").Complete(r)
+		).
+		Named("workspace").
+		Complete(r)
 }
 
-// gatewayAPIServed reports whether the cluster serves the Gateway kind. The
-// RESTMapper is cached, so this is a startup-time decision: installing the
-// Gateway API afterwards requires an operator restart for the watch to appear.
-func gatewayAPIServed(mgr ctrl.Manager) bool {
-	_, err := mgr.GetRESTMapper().RESTMapping(
-		schema.GroupKind{Group: gatewayv1.GroupName, Kind: "Gateway"},
-		gatewayv1.GroupVersion.Version,
-	)
+// kindServed reports whether the cluster serves the given kind. The RESTMapper
+// is cached, so this is a startup-time decision: installing a CRD afterwards
+// requires an operator restart before the kind is seen.
+func kindServed(mgr ctrl.Manager, gvk schema.GroupVersionKind) bool {
+	_, err := mgr.GetRESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version)
 	return err == nil
 }
 
-func (r *WorkspaceReconciler) findWorkspacesForGateway(ctx context.Context, obj client.Object) []reconcile.Request {
-	if !workspace.IsEndpointSourceGateway(obj) {
-		return nil
+// Every operator-wide input the workspaces derive from — the two Gateways, the
+// tenant-operator-config ConfigMap and the tenant-operator-secret Secret — is
+// watched the same way: narrow the event stream to the one object the operator
+// reads, then fan a real change out across every Workspace. The two helpers
+// below express that shape once; each input only supplies its own matcher and
+// its own notion of "the part I actually read changed".
+
+// enqueueAllWorkspacesIf maps an event on an operator-wide input to a reconcile
+// of every Workspace, since one change affects them all alike. Events on objects
+// the operator does not read are dropped, so a stray ConfigMap or Secret never
+// fans out.
+func (r *WorkspaceReconciler) enqueueAllWorkspacesIf(matches func(client.Object) bool) handler.MapFunc {
+	return func(ctx context.Context, obj client.Object) []reconcile.Request {
+		if !matches(obj) {
+			return nil
+		}
+		return r.allWorkspaceRequests(ctx)
 	}
-	return r.allWorkspaceRequests(ctx)
 }
 
-// gatewayChangedPredicate filters Gateway events down to the Gateways the
-// workspace endpoints are derived from, and for updates down to the two fields
-// those endpoints read: spec.addresses and spec.listeners.
-func gatewayChangedPredicate() predicate.Funcs {
+// operatorInputPredicate builds the event filter for one operator-wide input.
+// changed decides whether an update touched the part of the object reconcile
+// consumes, so metadata churn does not fan out across every Workspace. Creates
+// and deletes always pass: either can change what reconcile resolves.
+func operatorInputPredicate[T client.Object](
+	matches func(client.Object) bool,
+	changed func(oldObj, newObj T) bool,
+) predicate.Funcs {
 	return predicate.Funcs{
 		CreateFunc: func(e event.CreateEvent) bool {
-			return workspace.IsEndpointSourceGateway(e.Object)
+			return matches(e.Object)
 		},
 		DeleteFunc: func(e event.DeleteEvent) bool {
-			return workspace.IsEndpointSourceGateway(e.Object)
+			return matches(e.Object)
 		},
 		UpdateFunc: func(e event.UpdateEvent) bool {
-			if !workspace.IsEndpointSourceGateway(e.ObjectNew) {
+			if !matches(e.ObjectNew) {
 				return false
 			}
-			oldGateway, ok1 := e.ObjectOld.(*gatewayv1.Gateway)
-			newGateway, ok2 := e.ObjectNew.(*gatewayv1.Gateway)
+			oldObj, ok1 := e.ObjectOld.(T)
+			newObj, ok2 := e.ObjectNew.(T)
 			if !ok1 || !ok2 {
 				return false
 			}
+			return changed(oldObj, newObj)
+		},
+		GenericFunc: func(e event.GenericEvent) bool {
+			return matches(e.Object)
+		},
+	}
+}
+
+// gatewayChangedPredicate narrows Gateway events to the Gateways the workspace
+// endpoints are derived from, and updates to the two fields those endpoints
+// read: spec.addresses and spec.listeners.
+func gatewayChangedPredicate() predicate.Funcs {
+	return operatorInputPredicate(workspace.IsEndpointSourceGateway,
+		func(oldGateway, newGateway *gatewayv1.Gateway) bool {
 			return !equality.Semantic.DeepEqual(oldGateway.Spec.Addresses, newGateway.Spec.Addresses) ||
 				!equality.Semantic.DeepEqual(oldGateway.Spec.Listeners, newGateway.Spec.Listeners)
-		},
-		GenericFunc: func(e event.GenericEvent) bool {
-			return workspace.IsEndpointSourceGateway(e.Object)
-		},
-	}
+		})
 }
 
-// isOperatorConfig reports whether obj is the operator-wide tenant-operator-config
-// ConfigMap, which holds settings the operator cannot discover from the cluster
-// (e.g. the Rancher Project ID).
-func isOperatorConfig(obj client.Object) bool {
-	if obj == nil {
-		return false
-	}
-	return obj.GetName() == workspace.OperatorConfigName &&
-		obj.GetNamespace() == workspace.OperatorConfigNamespace
-}
-
-func (r *WorkspaceReconciler) findWorkspacesForOperatorConfig(ctx context.Context, obj client.Object) []reconcile.Request {
-	if !isOperatorConfig(obj) {
-		return nil
-	}
-	return r.allWorkspaceRequests(ctx)
-}
-
-// operatorConfigChangedPredicate filters ConfigMap events down to meaningful
-// changes of the tenant-operator-config ConfigMap. Updates that leave Data
-// untouched are dropped so unrelated metadata churn does not fan out a
-// reconcile across every Workspace.
+// operatorConfigChangedPredicate narrows ConfigMap events to the
+// tenant-operator-config ConfigMap, and updates to changes of its data.
 func operatorConfigChangedPredicate() predicate.Funcs {
-	return predicate.Funcs{
-		CreateFunc: func(e event.CreateEvent) bool {
-			return isOperatorConfig(e.Object)
-		},
-		DeleteFunc: func(e event.DeleteEvent) bool {
-			return isOperatorConfig(e.Object)
-		},
-		UpdateFunc: func(e event.UpdateEvent) bool {
-			if !isOperatorConfig(e.ObjectNew) {
-				return false
-			}
-			oldConfig, ok1 := e.ObjectOld.(*corev1.ConfigMap)
-			newConfig, ok2 := e.ObjectNew.(*corev1.ConfigMap)
-			if !ok1 || !ok2 {
-				return false
-			}
+	return operatorInputPredicate(workspace.IsOperatorConfig,
+		func(oldConfig, newConfig *corev1.ConfigMap) bool {
 			return !maps.Equal(oldConfig.Data, newConfig.Data)
-		},
-		GenericFunc: func(e event.GenericEvent) bool {
-			return isOperatorConfig(e.Object)
-		},
-	}
+		})
+}
+
+// operatorSecretChangedPredicate narrows Secret events to the
+// tenant-operator-secret, and updates to changes of the credentials themselves.
+func operatorSecretChangedPredicate() predicate.Funcs {
+	return operatorInputPredicate(workspace.IsOperatorSecret,
+		func(oldSecret, newSecret *corev1.Secret) bool {
+			return !maps.EqualFunc(oldSecret.Data, newSecret.Data, bytes.Equal)
+		})
 }
 
 // allWorkspaceRequests enqueues every Workspace. Used by watches on
@@ -381,13 +449,8 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 		rolesInUse[m.Role] = true
 	}
 
-	orderedRoles := []tenantv1alpha1.MemberRole{
-		tenantv1alpha1.MemberRoleAdmin,
-		tenantv1alpha1.MemberRoleEdit,
-		tenantv1alpha1.MemberRoleView,
-	}
 	newStatus.RoleBindingRefs = nil
-	for _, role := range orderedRoles {
+	for _, role := range tenantv1alpha1.AllMemberRoles() {
 		if rolesInUse[role] {
 			newStatus.RoleBindingRefs = append(newStatus.RoleBindingRefs, tenantv1alpha1.ResourceReference{
 				Name:      workspace.RoleBindingName + "-" + string(role),
@@ -416,35 +479,27 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 		newStatus.LimitRangeRef = nil
 	}
 
-	// Update ConfigMap reference
-	var configMap corev1.ConfigMap
-	if err := r.Get(ctx, client.ObjectKey{Name: workspace.ConfigName, Namespace: w.Spec.Namespace}, &configMap); err == nil {
-		newStatus.ConfigMapRef = &tenantv1alpha1.ResourceReference{
-			Name:      workspace.ConfigName,
-			Namespace: w.Spec.Namespace,
-		}
-	} else {
-		newStatus.ConfigMapRef = nil
+	// References to resources whose presence reconcile cannot guarantee from the
+	// spec alone are observed rather than derived:
+	//   - the workspace-config ConfigMap exists only while an endpoint resolves
+	//   - the image pull Secret is written when the Harbor robot is created, so a
+	//     Secret deleted afterwards cannot be rebuilt without new credentials
+	//   - the HelmRepository can be removed out-of-band by a Flux operator
+	var err error
+	if newStatus.ConfigMapRef, err = r.observedRef(
+		ctx, &corev1.ConfigMap{}, workspace.ConfigName, w.Spec.Namespace,
+	); err != nil {
+		return err
 	}
-
-	// Update ImagePullSecret reference
-	if r.HarborClient != nil {
-		newStatus.ImagePullSecretRef = &tenantv1alpha1.ResourceReference{
-			Name:      workspace.ImagePullSecretName,
-			Namespace: w.Spec.Namespace,
-		}
-	} else {
-		newStatus.ImagePullSecretRef = nil
+	if newStatus.ImagePullSecretRef, err = r.observedRef(
+		ctx, &corev1.Secret{}, workspace.ImagePullSecretName, w.Spec.Namespace,
+	); err != nil {
+		return err
 	}
-
-	// Update HelmRepository reference
-	if r.HarborClient != nil {
-		newStatus.HelmRepositoryRef = &tenantv1alpha1.ResourceReference{
-			Name:      workspace.HelmRepositoryName,
-			Namespace: w.Spec.Namespace,
-		}
-	} else {
-		newStatus.HelmRepositoryRef = nil
+	if newStatus.HelmRepositoryRef, err = r.observedRef(
+		ctx, &sourcev1.HelmRepository{}, workspace.HelmRepositoryName, w.Spec.Namespace,
+	); err != nil {
+		return err
 	}
 
 	// Update NetworkPolicy reference

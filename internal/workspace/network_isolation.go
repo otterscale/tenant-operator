@@ -26,7 +26,7 @@ import (
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
+	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
 )
 
 // ReconcileNetworkIsolation ensures the NetworkPolicy matches the desired state.

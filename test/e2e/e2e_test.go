@@ -68,6 +68,9 @@ var _ = Describe("Manager", Ordered, func() {
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
 
+		By("installing the third-party CRDs the operator requires")
+		Expect(utils.InstallThirdPartyCRDs()).To(Succeed(), "Failed to install third-party CRDs")
+
 		By("deploying the controller-manager")
 		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage))
 		_, err = utils.Run(cmd)
@@ -77,8 +80,15 @@ var _ = Describe("Manager", Ordered, func() {
 	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
 	// and deleting the namespace.
 	AfterAll(func() {
+		// Cluster-scoped, so deleting the namespace does not reclaim it. Left
+		// behind, it makes the next run on the same cluster fail at creation.
+		By("cleaning up the ClusterRoleBinding for metrics access")
+		cmd := exec.Command("kubectl", "delete", "clusterrolebinding", metricsRoleBindingName,
+			"--ignore-not-found")
+		_, _ = utils.Run(cmd)
+
 		By("cleaning up the curl pod for metrics")
-		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
+		cmd = exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
 		_, _ = utils.Run(cmd)
 
 		By("undeploying the controller-manager")
@@ -88,6 +98,9 @@ var _ = Describe("Manager", Ordered, func() {
 		By("uninstalling CRDs")
 		cmd = exec.Command("make", "uninstall")
 		_, _ = utils.Run(cmd)
+
+		By("uninstalling the third-party CRDs")
+		utils.UninstallThirdPartyCRDs()
 
 		By("removing manager namespace")
 		cmd = exec.Command("kubectl", "delete", "ns", namespace)
@@ -144,7 +157,7 @@ var _ = Describe("Manager", Ordered, func() {
 		It("should run successfully", func() {
 			By("validating that the controller-manager pod is running as expected")
 			verifyControllerUp := func(g Gomega) {
-				// Get the name of the controller-manager pod
+				By("getting the name of the controller-manager pod")
 				cmd := exec.Command("kubectl", "get",
 					"pods", "-l", "control-plane=controller-manager",
 					"-o", "go-template={{ range .items }}"+
@@ -161,7 +174,7 @@ var _ = Describe("Manager", Ordered, func() {
 				controllerPodName = podNames[0]
 				g.Expect(controllerPodName).To(ContainSubstring("controller-manager"))
 
-				// Validate the pod's status
+				By("validating the pod's status")
 				cmd = exec.Command("kubectl", "get",
 					"pods", controllerPodName, "-o", "jsonpath={.status.phase}",
 					"-n", namespace,
@@ -365,7 +378,7 @@ func serviceAccountToken() (string, error) {
 		"kind": "TokenRequest"
 	}`
 
-	// Temporary file to store the token request
+	By("creating temporary file to store the token request")
 	secretName := fmt.Sprintf("%s-token-request", serviceAccountName)
 	tokenRequestFile := filepath.Join("/tmp", secretName)
 	err := os.WriteFile(tokenRequestFile, []byte(tokenRequestRawString), os.FileMode(0o644))
@@ -375,7 +388,7 @@ func serviceAccountToken() (string, error) {
 
 	var out string
 	verifyTokenCreation := func(g Gomega) {
-		// Execute kubectl command to create the token
+		By("executing kubectl command to create the token")
 		cmd := exec.Command("kubectl", "create", "--raw", fmt.Sprintf(
 			"/api/v1/namespaces/%s/serviceaccounts/%s/token",
 			namespace,
@@ -385,7 +398,7 @@ func serviceAccountToken() (string, error) {
 		output, err := cmd.CombinedOutput()
 		g.Expect(err).NotTo(HaveOccurred())
 
-		// Parse the JSON output to extract the token
+		By("parsing the JSON output to extract the token")
 		var token tokenRequest
 		err = json.Unmarshal(output, &token)
 		g.Expect(err).NotTo(HaveOccurred())

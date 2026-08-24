@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -26,7 +27,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -39,7 +40,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
+	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
 	"github.com/otterscale/tenant-operator/internal/labels"
 	ws "github.com/otterscale/tenant-operator/internal/workspace"
 )
@@ -55,6 +56,7 @@ var _ = Describe("Workspace Controller", func() {
 	var (
 		ctx           context.Context
 		reconciler    *WorkspaceReconciler
+		harborFake    *fakeHarborClient
 		workspace     *tenantv1alpha1.Workspace
 		resourceName  string
 		namespaceName string
@@ -101,10 +103,12 @@ var _ = Describe("Workspace Controller", func() {
 		ctx = context.Background()
 		resourceName = string(uuid.NewUUID())
 		namespaceName = string(uuid.NewUUID())
+		harborFake = &fakeHarborClient{}
 		reconciler = &WorkspaceReconciler{
-			Client:   k8sClient,
-			Scheme:   k8sClient.Scheme(),
-			Recorder: events.NewFakeRecorder(100),
+			Client:          k8sClient,
+			Scheme:          k8sClient.Scheme(),
+			Recorder:        events.NewFakeRecorder(100),
+			NewHarborClient: newFakeHarborClient(harborFake),
 		}
 		workspace = makeWorkspace(resourceName, namespaceName)
 	})
@@ -134,24 +138,6 @@ var _ = Describe("Workspace Controller", func() {
 			fetchResource(&ns, namespaceName, "")
 			Expect(ns.Labels).To(HaveKeyWithValue("app.kubernetes.io/managed-by", "tenant-operator"))
 
-			By("Verifying the workspace reconciler ServiceAccount RBAC")
-			var serviceAccount corev1.ServiceAccount
-			fetchResource(&serviceAccount, ws.WorkspaceReconcilerName, namespaceName)
-			Expect(serviceAccount.OwnerReferences).NotTo(BeEmpty())
-
-			var reconcilerBinding rbacv1.RoleBinding
-			fetchResource(&reconcilerBinding, ws.WorkspaceReconcilerName, namespaceName)
-			Expect(reconcilerBinding.RoleRef).To(Equal(rbacv1.RoleRef{
-				APIGroup: rbacv1.GroupName,
-				Kind:     "ClusterRole",
-				Name:     string(tenantv1alpha1.MemberRoleAdmin),
-			}))
-			Expect(reconcilerBinding.Subjects).To(ConsistOf(rbacv1.Subject{
-				Kind:      rbacv1.ServiceAccountKind,
-				Name:      ws.WorkspaceReconcilerName,
-				Namespace: namespaceName,
-			}))
-
 			By("Verifying the Admin RoleBinding")
 			var rb rbacv1.RoleBinding
 			fetchResource(&rb, ws.RoleBindingName+"-admin", namespaceName)
@@ -161,18 +147,70 @@ var _ = Describe("Workspace Controller", func() {
 			fetchResource(workspace, resourceName, "")
 			Expect(workspace.Status.NamespaceRef.Name).To(Equal(namespaceName))
 
-			readyCond := meta.FindStatusCondition(workspace.Status.Conditions, "Ready")
+			readyCond := apimeta.FindStatusCondition(workspace.Status.Conditions, "Ready")
 			Expect(readyCond).NotTo(BeNil())
 			Expect(readyCond.Status).To(Equal(metav1.ConditionTrue))
 		})
 	})
 
+	Context("Harbor Integration", func() {
+		It("should publish the Harbor refs once the resources exist", func() {
+			fullyReconcile()
+
+			var pullSecret corev1.Secret
+			fetchResource(&pullSecret, ws.ImagePullSecretName, namespaceName)
+			Expect(pullSecret.Type).To(Equal(corev1.SecretTypeDockerConfigJson))
+
+			By("Listing the pull secret on the namespace's default ServiceAccount")
+			var defaultSA corev1.ServiceAccount
+			fetchResource(&defaultSA, "default", namespaceName)
+			Expect(defaultSA.ImagePullSecrets).To(ContainElement(
+				corev1.LocalObjectReference{Name: ws.ImagePullSecretName}))
+
+			fetchResource(workspace, resourceName, "")
+			Expect(workspace.Status.ImagePullSecretRef).NotTo(BeNil())
+			Expect(workspace.Status.ImagePullSecretRef.Name).To(Equal(ws.ImagePullSecretName))
+			Expect(workspace.Status.HelmRepositoryRef).NotTo(BeNil())
+			Expect(workspace.Status.HelmRepositoryRef.Name).To(Equal(ws.HelmRepositoryName))
+		})
+
+		// A robot that already exists returns no credentials, so the image pull
+		// Secret cannot be built. The status must not claim it exists.
+		It("should leave the image pull secret ref unset when the robot predates the secret", func() {
+			harborFake.robotExists = true
+
+			fullyReconcile()
+
+			err := k8sClient.Get(ctx,
+				types.NamespacedName{Name: ws.ImagePullSecretName, Namespace: namespaceName},
+				&corev1.Secret{})
+			Expect(errors.IsNotFound(err)).To(BeTrue(), "no credentials means no image pull secret")
+
+			fetchResource(workspace, resourceName, "")
+			Expect(workspace.Status.ImagePullSecretRef).To(BeNil(),
+				"status must not advertise an image pull secret that was never written")
+		})
+
+		It("should report pending Harbor members on the Ready condition", func() {
+			harborFake.missingUsers = []string{adminUser}
+
+			fullyReconcile()
+
+			fetchResource(workspace, resourceName, "")
+			readyCond := apimeta.FindStatusCondition(workspace.Status.Conditions, "Ready")
+			Expect(readyCond).NotTo(BeNil())
+			Expect(readyCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(readyCond.Reason).To(Equal("HarborMembersPending"))
+			Expect(readyCond.Message).To(ContainSubstring(adminUser))
+		})
+	})
+
 	Context("Workspace Config", func() {
-		// Both endpoints are derived from Gateways, and the Gateway API CRDs are
-		// not installed in envtest. That makes this the graceful-degradation case:
-		// the operator must still provision the workspace. Endpoint resolution
-		// itself is covered by the workspace package unit tests.
-		It("should provision the workspace when the Gateway API is unavailable", func() {
+		// The Gateway API is served here but no Gateway objects are deployed, which
+		// is the graceful-degradation case: endpoints cannot be resolved, yet the
+		// operator must still provision the workspace. Endpoint resolution itself
+		// is covered by the workspace package unit tests.
+		It("should provision the workspace when no endpoint source Gateway exists", func() {
 			fullyReconcile()
 
 			var cm corev1.ConfigMap
@@ -182,7 +220,7 @@ var _ = Describe("Workspace Controller", func() {
 			fetchResource(workspace, resourceName, "")
 			Expect(workspace.Status.ConfigMapRef).To(BeNil())
 
-			readyCond := meta.FindStatusCondition(workspace.Status.Conditions, "Ready")
+			readyCond := apimeta.FindStatusCondition(workspace.Status.Conditions, "Ready")
 			Expect(readyCond).NotTo(BeNil())
 			Expect(readyCond.Status).To(Equal(metav1.ConditionTrue))
 		})
@@ -205,7 +243,7 @@ var _ = Describe("Workspace Controller", func() {
 		})
 
 		It("should enqueue every workspace when an endpoint source Gateway changes", func() {
-			Expect(reconciler.findWorkspacesForGateway(ctx, &gatewayv1.Gateway{
+			Expect(reconciler.enqueueAllWorkspacesIf(ws.IsEndpointSourceGateway)(ctx, &gatewayv1.Gateway{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      ws.PlatformGatewayName,
 					Namespace: ws.PlatformGatewayNamespace,
@@ -215,7 +253,7 @@ var _ = Describe("Workspace Controller", func() {
 			))
 
 			By("Ignoring Gateways the endpoints are not derived from")
-			Expect(reconciler.findWorkspacesForGateway(ctx, &gatewayv1.Gateway{
+			Expect(reconciler.enqueueAllWorkspacesIf(ws.IsEndpointSourceGateway)(ctx, &gatewayv1.Gateway{
 				ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: ws.PlatformGatewayNamespace},
 			})).To(BeEmpty())
 		})
@@ -230,10 +268,37 @@ var _ = Describe("Workspace Controller", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 			Expect((&WorkspaceReconciler{
-				Client:   mgr.GetClient(),
-				Scheme:   mgr.GetScheme(),
-				Recorder: events.NewFakeRecorder(100),
+				Client:          mgr.GetClient(),
+				Scheme:          mgr.GetScheme(),
+				Recorder:        events.NewFakeRecorder(100),
+				NewHarborClient: newFakeHarborClient(&fakeHarborClient{}),
 			}).SetupWithManager(mgr)).To(Succeed())
+		})
+
+		// Flux and the Gateway API are prerequisites rather than optional
+		// integrations, so a cluster without their CRDs must be refused at startup
+		// with a message naming the requirement — not left to fail once the
+		// corresponding informer starts.
+		It("should refuse to start when a required CRD is absent", func() {
+			mgr, err := ctrl.NewManager(cfg, ctrl.Options{
+				Scheme:         k8sClient.Scheme(),
+				LeaderElection: false,
+				Metrics:        metricsserver.Options{BindAddress: "0"},
+				MapperProvider: func(*rest.Config, *http.Client) (apimeta.RESTMapper, error) {
+					// Serves nothing, so every kind reports a no-match.
+					return apimeta.NewDefaultRESTMapper(nil), nil
+				},
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			err = (&WorkspaceReconciler{
+				Client:          mgr.GetClient(),
+				Scheme:          mgr.GetScheme(),
+				Recorder:        events.NewFakeRecorder(100),
+				NewHarborClient: newFakeHarborClient(&fakeHarborClient{}),
+			}).SetupWithManager(mgr)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("are required by the tenant operator"))
 		})
 	})
 
@@ -244,19 +309,19 @@ var _ = Describe("Workspace Controller", func() {
 		// tenant-operator-config ConfigMap, not a Workspace spec field.
 		BeforeEach(func() {
 			Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{Name: ws.OperatorConfigNamespace},
+				ObjectMeta: metav1.ObjectMeta{Name: ws.OperatorNamespace},
 			}))).To(Succeed())
 
 			globalConfig := &corev1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      ws.OperatorConfigName,
-					Namespace: ws.OperatorConfigNamespace,
+					Namespace: ws.OperatorNamespace,
 				},
-				Data: map[string]string{ws.RancherProjectIDConfigKey: rancherProjectID},
+				Data: map[string]string{ws.RancherProjectIDKey: rancherProjectID},
 			}
 			if err := k8sClient.Create(ctx, globalConfig); errors.IsAlreadyExists(err) {
-				fetchResource(globalConfig, ws.OperatorConfigName, ws.OperatorConfigNamespace)
-				globalConfig.Data = map[string]string{ws.RancherProjectIDConfigKey: rancherProjectID}
+				fetchResource(globalConfig, ws.OperatorConfigName, ws.OperatorNamespace)
+				globalConfig.Data = map[string]string{ws.RancherProjectIDKey: rancherProjectID}
 				Expect(k8sClient.Update(ctx, globalConfig)).To(Succeed())
 			} else {
 				Expect(err).NotTo(HaveOccurred())
@@ -283,14 +348,14 @@ var _ = Describe("Workspace Controller", func() {
 
 		It("should enqueue every workspace when the global config changes", func() {
 			globalConfig := &corev1.ConfigMap{}
-			fetchResource(globalConfig, ws.OperatorConfigName, ws.OperatorConfigNamespace)
+			fetchResource(globalConfig, ws.OperatorConfigName, ws.OperatorNamespace)
 
-			Expect(reconciler.findWorkspacesForOperatorConfig(ctx, globalConfig)).To(ContainElement(
+			Expect(reconciler.enqueueAllWorkspacesIf(ws.IsOperatorConfig)(ctx, globalConfig)).To(ContainElement(
 				reconcile.Request{NamespacedName: types.NamespacedName{Name: resourceName}},
 			))
 
 			By("Ignoring ConfigMaps that are not the global config")
-			Expect(reconciler.findWorkspacesForOperatorConfig(ctx, &corev1.ConfigMap{
+			Expect(reconciler.enqueueAllWorkspacesIf(ws.IsOperatorConfig)(ctx, &corev1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{Name: ws.ConfigName, Namespace: namespaceName},
 			})).To(BeEmpty())
 		})
@@ -310,7 +375,7 @@ var _ = Describe("Workspace Controller", func() {
 
 			By("Verifying the status condition is updated")
 			fetchResource(workspace, resourceName, "")
-			readyCond := meta.FindStatusCondition(workspace.Status.Conditions, "Ready")
+			readyCond := apimeta.FindStatusCondition(workspace.Status.Conditions, "Ready")
 			Expect(readyCond).NotTo(BeNil())
 			Expect(readyCond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(readyCond.Reason).To(Equal("NamespaceConflict"))

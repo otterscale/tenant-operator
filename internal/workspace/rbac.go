@@ -26,7 +26,7 @@ import (
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
+	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
 )
 
 // ReconcileRoleBindings groups members by role and creates the necessary bindings.
@@ -37,13 +37,7 @@ func ReconcileRoleBindings(ctx context.Context, c client.Client, scheme *runtime
 	}
 
 	// Reconcile bindings for each known role in deterministic order
-	roles := []tenantv1alpha1.MemberRole{
-		tenantv1alpha1.MemberRoleAdmin,
-		tenantv1alpha1.MemberRoleEdit,
-		tenantv1alpha1.MemberRoleView,
-	}
-
-	for _, role := range roles {
+	for _, role := range tenantv1alpha1.AllMemberRoles() {
 		if err := reconcileRoleBinding(ctx, c, scheme, w, version, role, membersByRole[role]); err != nil {
 			return err
 		}
@@ -77,7 +71,7 @@ func reconcileRoleBinding(ctx context.Context, c client.Client, scheme *runtime.
 			})
 		}
 		binding.RoleRef = rbacv1.RoleRef{
-			Kind:     "ClusterRole",
+			Kind:     clusterRoleKind,
 			APIGroup: rbacv1.GroupName,
 			Name:     string(role),
 		}

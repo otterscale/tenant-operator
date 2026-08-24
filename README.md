@@ -26,7 +26,7 @@ Admission webhooks default and validate `Workspace` resources — auto-generatin
 
 ## Built With
 
-Go and [kubebuilder](https://book.kubebuilder.io/) on top of `controller-runtime`. The `Workspace` API is defined in [otterscale/api](https://github.com/otterscale/api).
+Go and [kubebuilder](https://book.kubebuilder.io/) on top of `controller-runtime`.
 
 ## Documentation
 
@@ -34,7 +34,7 @@ Installation, the full `Workspace` spec, and operational guides will be publishe
 
 ## Ecosystem
 
-The Tenant Operator is one component of the OtterScale platform; the `Workspace` CRD it reconciles is defined in [otterscale/api](https://github.com/otterscale/api). See the [otterscale](https://github.com/otterscale/otterscale) repository for an overview of the full project and its components.
+The Tenant Operator is one component of the OtterScale platform. See the [otterscale](https://github.com/otterscale/otterscale) repository for an overview of the full project and its components.
 
 ## Contributing
 

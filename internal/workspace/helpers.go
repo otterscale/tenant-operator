@@ -24,6 +24,11 @@ import (
 )
 
 const (
+	// OperatorNamespace is where the operator runs, and therefore where it looks
+	// for the operator-wide inputs every workspace derives from: the
+	// tenant-operator-config ConfigMap and the tenant-operator-secret Secret.
+	OperatorNamespace = "otterscale-system"
+
 	RoleBindingName          = "workspace-role-binding"
 	ResourceQuotaName        = "workspace-resource-quota"
 	LimitRangeName           = "workspace-limit-range"
@@ -37,6 +42,10 @@ const (
 	LabelInternal   = "tenant.otterscale.io/internal"
 
 	UserLabelPrefix = "user.otterscale.io/"
+
+	// clusterRoleKind is the RoleRef.Kind naming a ClusterRole. rbac/v1 exports
+	// constants for subject kinds but not for this one.
+	clusterRoleKind = "ClusterRole"
 
 	// ConditionTypeReady is the condition type that indicates whether all
 	// workspace resources have been successfully reconciled.

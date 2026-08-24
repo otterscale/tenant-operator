@@ -1,4 +1,4 @@
-# tenant-operator - AI Agent Guide
+# Tenant Operator - AI Agent Guide
 
 ## Project Structure
 

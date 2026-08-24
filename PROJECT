@@ -2,7 +2,7 @@
 # This file is used to track the info used to scaffold your project
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
-cliVersion: 4.12.0
+cliVersion: 4.15.0
 domain: otterscale.io
 layout:
 - go.kubebuilder.io/v4
@@ -11,13 +11,14 @@ plugins:
 projectName: tenant-operator
 repo: github.com/otterscale/tenant-operator
 resources:
-- controller: true
+- api:
+    crdVersion: v1
+    namespaced: false
+  controller: true
   domain: otterscale.io
-  external: true
   group: tenant
   kind: Workspace
-  module: github.com/otterscale/api
-  path: github.com/otterscale/api/tenant/v1alpha1
+  path: github.com/otterscale/tenant-operator/api/v1alpha1
   version: v1alpha1
   webhooks:
     defaulting: true

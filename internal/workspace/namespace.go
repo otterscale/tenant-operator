@@ -28,17 +28,17 @@ import (
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
+	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
 )
 
 const (
 	rancherProjectIDAnnotation = "field.cattle.io/projectId"
 
-	// RancherProjectIDConfigKey is the tenant-operator-config key carrying the
+	// RancherProjectIDKey is the tenant-operator-config key carrying the
 	// Rancher Project ID, in "<cluster-id>:<project-id>" form. It is operator-wide
 	// configuration rather than a Workspace spec field, so every workspace
 	// namespace this operator manages joins the same Rancher Project.
-	RancherProjectIDConfigKey = "RancherProjectID"
+	RancherProjectIDKey = "RancherProjectID"
 )
 
 // podSecurityLabels returns the Pod Security admission labels applied to every
@@ -75,7 +75,7 @@ func ReconcileNamespace(ctx context.Context, c client.Client, scheme *runtime.Sc
 	if err != nil {
 		return err
 	}
-	rancherProjectID := globalConfig[RancherProjectIDConfigKey]
+	rancherProjectID := globalConfig[RancherProjectIDKey]
 
 	op, err := ctrlutil.CreateOrUpdate(ctx, c, namespace, func() error {
 		// Safety check: Prevent taking over existing namespaces not owned by us
