@@ -206,16 +206,6 @@ func (in *WorkspaceStatus) DeepCopyInto(out *WorkspaceStatus) {
 		*out = make([]ResourceReference, len(*in))
 		copy(*out, *in)
 	}
-	if in.PeerAuthenticationRef != nil {
-		in, out := &in.PeerAuthenticationRef, &out.PeerAuthenticationRef
-		*out = new(ResourceReference)
-		**out = **in
-	}
-	if in.AuthorizationPolicyRef != nil {
-		in, out := &in.AuthorizationPolicyRef, &out.AuthorizationPolicyRef
-		*out = new(ResourceReference)
-		**out = **in
-	}
 	if in.NetworkPolicyRef != nil {
 		in, out := &in.NetworkPolicyRef, &out.NetworkPolicyRef
 		*out = new(ResourceReference)

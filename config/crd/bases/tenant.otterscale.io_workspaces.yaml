@@ -292,21 +292,6 @@ spec:
           status:
             description: Status represents the current information about the Workspace.
             properties:
-              authorizationPolicyRef:
-                description: AuthorizationPolicyRef is a reference to the Istio AuthorizationPolicy
-                  enforcing network isolation.
-                properties:
-                  name:
-                    description: Name is the name of the referenced resource.
-                    type: string
-                  namespace:
-                    description: |-
-                      Namespace is the namespace of the referenced resource.
-                      Empty for cluster-scoped resources.
-                    type: string
-                required:
-                - name
-                type: object
               conditions:
                 description: Conditions store the status conditions of the Workspace
                   (e.g., Ready, Failed).
@@ -466,21 +451,6 @@ spec:
                   This allows clients to determine whether the controller has processed the latest spec changes.
                 format: int64
                 type: integer
-              peerAuthenticationRef:
-                description: PeerAuthenticationRef is a reference to the Istio PeerAuthentication
-                  resource for mTLS settings.
-                properties:
-                  name:
-                    description: Name is the name of the referenced resource.
-                    type: string
-                  namespace:
-                    description: |-
-                      Namespace is the namespace of the referenced resource.
-                      Empty for cluster-scoped resources.
-                    type: string
-                required:
-                - name
-                type: object
               resourceQuotaRef:
                 description: ResourceQuotaRef is a reference to the ResourceQuota
                   managed by this Workspace.

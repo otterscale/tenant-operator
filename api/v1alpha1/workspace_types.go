@@ -69,7 +69,7 @@ type WorkspaceMember struct {
 }
 
 // NetworkIsolationSpec configures network policies for the workspace.
-// It supports both standard NetworkPolicy and Istio AuthorizationPolicy.
+// It is enforced with a standard Kubernetes NetworkPolicy restricting ingress.
 // +kubebuilder:validation:XValidation:rule="!has(self.allowedNamespaces) || size(self.allowedNamespaces) == 0 || self.enabled",message="allowedNamespaces can only be set when network isolation is enabled"
 type NetworkIsolationSpec struct {
 	// Enabled toggles the enforcement of network isolation.
@@ -164,14 +164,6 @@ type WorkspaceStatus struct {
 	// +listMapKey=name
 	// +optional
 	RoleBindingRefs []ResourceReference `json:"roleBindingRefs,omitempty"`
-
-	// PeerAuthenticationRef is a reference to the Istio PeerAuthentication resource for mTLS settings.
-	// +optional
-	PeerAuthenticationRef *ResourceReference `json:"peerAuthenticationRef,omitempty"`
-
-	// AuthorizationPolicyRef is a reference to the Istio AuthorizationPolicy enforcing network isolation.
-	// +optional
-	AuthorizationPolicyRef *ResourceReference `json:"authorizationPolicyRef,omitempty"`
 
 	// NetworkPolicyRef is a reference to the NetworkPolicy enforcing network isolation.
 	// +optional
