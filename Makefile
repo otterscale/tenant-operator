@@ -62,6 +62,30 @@ fmt: ## Run go fmt against code.
 vet: ## Run go vet against code.
 	go vet ./...
 
+.PHONY: verify-test-crds
+verify-test-crds: controller-gen ## Verify test/crd still matches the modules pinned in go.mod.
+	@tmp="$$(mktemp -d)"; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	gateway_api="$$(go list -m -f '{{.Dir}}' sigs.k8s.io/gateway-api)"; \
+	cp "$$gateway_api"/config/crd/standard/gateway.networking.k8s.io_gateways.yaml "$$tmp/"; \
+	flux_api="$$(go list -m -f '{{.Dir}}' github.com/fluxcd/source-controller/api)"; \
+	"$(CONTROLLER_GEN)" crd paths="$$flux_api/v1/..." output:crd:artifacts:config="$$tmp"; \
+	status=0; \
+	for committed in test/crd/*.yaml; do \
+		name="$$(basename "$$committed")"; \
+		if [ ! -f "$$tmp/$$name" ]; then \
+			echo "$$committed has no counterpart in the pinned modules"; \
+			status=1; \
+			continue; \
+		fi; \
+		diff -u "$$committed" "$$tmp/$$name" || status=1; \
+	done; \
+	if [ "$$status" -ne 0 ]; then \
+		echo; \
+		echo "test/crd is out of date with go.mod — refresh it, see test/crd/README.md"; \
+	fi; \
+	exit "$$status"
+
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out

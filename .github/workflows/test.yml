@@ -23,6 +23,11 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # Runs before the tests so a module bump that leaves test/crd behind is
+      # reported as staleness rather than as a confusing envtest failure.
+      - name: Verify third-party test CRDs
+        run: make verify-test-crds
+
       - name: Running Tests
         run: |
           go mod tidy
