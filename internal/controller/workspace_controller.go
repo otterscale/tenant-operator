@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -61,11 +62,24 @@ import (
 // while the actual resource synchronization logic resides in internal/workspace/.
 type WorkspaceReconciler struct {
 	client.Client
-	Scheme       *runtime.Scheme
-	Version      string
-	Recorder     events.EventRecorder
-	HarborClient harbor.Client // nil disables Harbor integration
-	HarborURL    string
+	Scheme   *runtime.Scheme
+	Version  string
+	Recorder events.EventRecorder
+
+	// NewHarborClient builds the Harbor API client from the credentials found in
+	// the operator-wide Secret. Defaults to harbor.NewClient when unset; tests
+	// substitute a fake so reconciliation can run without a Harbor server.
+	NewHarborClient func(baseURL, username, password string) harbor.Client
+}
+
+// harborClient builds the Harbor API client for the given credentials, falling
+// back to the real HTTP client when no factory was injected.
+func (r *WorkspaceReconciler) harborClient(creds *workspace.HarborCredentials) harbor.Client {
+	newClient := r.NewHarborClient
+	if newClient == nil {
+		newClient = harbor.NewClient
+	}
+	return newClient(creds.URL, creds.RobotName, creds.RobotSecret)
 }
 
 // RBAC Permissions required by the controller:
@@ -111,13 +125,13 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	// 2. Reconcile all domain resources
-	missingHarborMembers, err := r.reconcileResources(ctx, &w)
+	missingHarborMembers, harborEnabled, err := r.reconcileResources(ctx, &w)
 	if err != nil {
 		return r.handleReconcileError(ctx, &w, err)
 	}
 
 	// 3. Update Status (Reflect the observed state back to the user)
-	if err := r.updateStatus(ctx, &w, missingHarborMembers); err != nil {
+	if err := r.updateStatus(ctx, &w, missingHarborMembers, harborEnabled); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -132,42 +146,54 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 }
 
 // reconcileResources orchestrates the domain-level resource sync in order.
+//
 // Returns the list of workspace members whose Harbor user accounts do not yet
-// exist — the caller requeues so they get added when Harbor provisions them.
-func (r *WorkspaceReconciler) reconcileResources(ctx context.Context, w *tenantv1alpha1.Workspace) ([]string, error) {
+// exist — the caller requeues so they get added when Harbor provisions them —
+// and whether the Harbor integration was configured for this pass, which the
+// status update needs in order to publish or clear the Harbor resource refs.
+func (r *WorkspaceReconciler) reconcileResources(ctx context.Context, w *tenantv1alpha1.Workspace) ([]string, bool, error) {
 	if err := workspace.ReconcileNamespace(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := workspace.ReconcileServiceAccount(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
-		return nil, err
+		return nil, false, err
+	}
+
+	// Harbor is opt-in: its credentials live in the operator-wide Secret, read
+	// here rather than at startup so adding or rotating them takes effect on the
+	// next reconcile instead of requiring a restart.
+	creds, err := workspace.OperatorHarborCredentials(ctx, r.Client)
+	if err != nil {
+		return nil, false, err
 	}
 	var missingHarborMembers []string
-	if r.HarborClient != nil {
-		missing, err := workspace.ReconcileHarbor(ctx, r.Client, r.Scheme, w, r.Version, r.HarborClient, r.HarborURL)
+	if creds != nil {
+		missing, err := workspace.ReconcileHarbor(ctx, r.Client, r.Scheme, w, r.Version, r.harborClient(creds), creds.URL)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		missingHarborMembers = missing
-		if err := workspace.ReconcileHelmRepository(ctx, r.Client, r.Scheme, w, r.Version, r.HarborURL); err != nil {
-			return nil, err
+		if err := workspace.ReconcileHelmRepository(ctx, r.Client, r.Scheme, w, r.Version, creds.URL); err != nil {
+			return nil, false, err
 		}
 	}
+
 	if err := workspace.ReconcileRoleBindings(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := workspace.ReconcileResourceQuota(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := workspace.ReconcileLimitRange(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := workspace.ReconcileConfig(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := workspace.ReconcileNetworkIsolation(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return missingHarborMembers, nil
+	return missingHarborMembers, creds != nil, nil
 }
 
 // handleReconcileError categorizes errors and updates status accordingly.
@@ -231,6 +257,11 @@ func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&corev1.ConfigMap{},
 			handler.EnqueueRequestsFromMapFunc(r.findWorkspacesForOperatorConfig),
 			builder.WithPredicates(operatorConfigChangedPredicate()),
+		).
+		Watches(
+			&corev1.Secret{},
+			handler.EnqueueRequestsFromMapFunc(r.findWorkspacesForOperatorSecret),
+			builder.WithPredicates(operatorSecretChangedPredicate()),
 		)
 
 	// The Gateway API is optional. Without its CRDs the informer would fail to
@@ -344,6 +375,42 @@ func operatorConfigChangedPredicate() predicate.Funcs {
 	}
 }
 
+func (r *WorkspaceReconciler) findWorkspacesForOperatorSecret(ctx context.Context, obj client.Object) []reconcile.Request {
+	if !workspace.IsOperatorHarborSecret(obj) {
+		return nil
+	}
+	return r.allWorkspaceRequests(ctx)
+}
+
+// operatorSecretChangedPredicate filters Secret events down to meaningful changes
+// of the tenant-operator-secret. Creating it enables the Harbor integration and
+// deleting it disables it again, so both fan out; updates only matter when the
+// credentials themselves changed.
+func operatorSecretChangedPredicate() predicate.Funcs {
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool {
+			return workspace.IsOperatorHarborSecret(e.Object)
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return workspace.IsOperatorHarborSecret(e.Object)
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			if !workspace.IsOperatorHarborSecret(e.ObjectNew) {
+				return false
+			}
+			oldSecret, ok1 := e.ObjectOld.(*corev1.Secret)
+			newSecret, ok2 := e.ObjectNew.(*corev1.Secret)
+			if !ok1 || !ok2 {
+				return false
+			}
+			return !maps.EqualFunc(oldSecret.Data, newSecret.Data, bytes.Equal)
+		},
+		GenericFunc: func(e event.GenericEvent) bool {
+			return workspace.IsOperatorHarborSecret(e.Object)
+		},
+	}
+}
+
 // allWorkspaceRequests enqueues every Workspace. Used by watches on
 // operator-wide inputs, where a single change affects all workspaces alike.
 func (r *WorkspaceReconciler) allWorkspaceRequests(ctx context.Context) []reconcile.Request {
@@ -366,7 +433,12 @@ func (r *WorkspaceReconciler) allWorkspaceRequests(ctx context.Context) []reconc
 // updateStatus calculates the status based on the current observed state and patches the resource.
 // When missingHarborMembers is non-empty, Ready is set to False with reason
 // HarborMembersPending so the Workspace surfaces the partial state to users.
-func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha1.Workspace, missingHarborMembers []string) error {
+func (r *WorkspaceReconciler) updateStatus(
+	ctx context.Context,
+	w *tenantv1alpha1.Workspace,
+	missingHarborMembers []string,
+	harborEnabled bool,
+) error {
 	newStatus := w.Status.DeepCopy()
 	newStatus.ObservedGeneration = w.Generation
 
@@ -428,7 +500,7 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 	}
 
 	// Update ImagePullSecret reference
-	if r.HarborClient != nil {
+	if harborEnabled {
 		newStatus.ImagePullSecretRef = &tenantv1alpha1.ResourceReference{
 			Name:      workspace.ImagePullSecretName,
 			Namespace: w.Spec.Namespace,
@@ -438,7 +510,7 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 	}
 
 	// Update HelmRepository reference
-	if r.HarborClient != nil {
+	if harborEnabled {
 		newStatus.HelmRepositoryRef = &tenantv1alpha1.ResourceReference{
 			Name:      workspace.HelmRepositoryName,
 			Namespace: w.Spec.Namespace,

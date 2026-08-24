@@ -21,8 +21,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -33,6 +35,88 @@ import (
 	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
 	"github.com/otterscale/tenant-operator/internal/harbor"
 )
+
+const (
+	// OperatorSecretNamespace and OperatorSecretName locate the operator-wide
+	// Secret holding the Harbor admin robot credentials. Like the
+	// tenant-operator-config ConfigMap this is operator-wide configuration read
+	// from the cluster at reconcile time, so rotating it takes effect without
+	// restarting the operator.
+	OperatorSecretNamespace = "otterscale-system"
+	OperatorSecretName      = "tenant-operator-secret"
+
+	// HarborURLKey, HarborRobotNameKey and HarborRobotSecretKey are the
+	// OperatorSecretName keys carrying the Harbor admin robot credentials.
+	HarborURLKey         = "HARBOR_URL"
+	HarborRobotNameKey   = "HARBOR_ROBOT_NAME"
+	HarborRobotSecretKey = "HARBOR_ROBOT_SECRET"
+)
+
+// HarborCredentials are the Harbor admin robot credentials the operator uses to
+// provision per-workspace projects and robot accounts.
+type HarborCredentials struct {
+	URL         string
+	RobotName   string
+	RobotSecret string
+}
+
+// OperatorHarborCredentials returns the Harbor credentials held by the
+// operator-wide tenant-operator-secret.
+//
+// A missing Secret is not an error: it returns nil so callers can treat "not
+// configured" as "Harbor integration disabled", the same way operatorConfigData
+// treats a missing tenant-operator-config ConfigMap.
+//
+// A Secret that exists but does not carry every key is reported as an error
+// instead — that is a misconfiguration rather than an opt-out, and silently
+// degrading to a half-configured Harbor client would surface later as opaque
+// request failures against every workspace.
+func OperatorHarborCredentials(ctx context.Context, c client.Client) (*HarborCredentials, error) {
+	key := types.NamespacedName{Name: OperatorSecretName, Namespace: OperatorSecretNamespace}
+
+	var secret corev1.Secret
+	if err := c.Get(ctx, key, &secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	creds := &HarborCredentials{
+		URL:         string(secret.Data[HarborURLKey]),
+		RobotName:   string(secret.Data[HarborRobotNameKey]),
+		RobotSecret: string(secret.Data[HarborRobotSecretKey]),
+	}
+
+	var missing []string
+	for _, field := range []struct {
+		key   string
+		value string
+	}{
+		{HarborURLKey, creds.URL},
+		{HarborRobotNameKey, creds.RobotName},
+		{HarborRobotSecretKey, creds.RobotSecret},
+	} {
+		if field.value == "" {
+			missing = append(missing, field.key)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("secret %s is missing required keys: %s", key, strings.Join(missing, ", "))
+	}
+
+	return creds, nil
+}
+
+// IsOperatorHarborSecret reports whether obj is the operator-wide Secret holding
+// the Harbor admin robot credentials.
+func IsOperatorHarborSecret(obj client.Object) bool {
+	if obj == nil {
+		return false
+	}
+	return obj.GetName() == OperatorSecretName &&
+		obj.GetNamespace() == OperatorSecretNamespace
+}
 
 // ReconcileHarbor ensures the Harbor project, robot account, docker-registry Secret,
 // and default ServiceAccount imagePullSecrets are configured for the workspace.
