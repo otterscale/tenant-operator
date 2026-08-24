@@ -3,6 +3,8 @@ VERSION=$(shell git describe --tags --always)
 
 # Image URL to use all building/pushing image targets
 IMG ?= controller:latest
+# YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
+YEAR ?= $(shell date +%Y)
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -50,15 +52,7 @@ manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and Cust
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
-	"$(CONTROLLER_GEN)" object:headerFile="hack/boilerplate.go.txt" paths="./..."
-
-API_VERSION ?= $(call gomodver,github.com/otterscale/api)
-
-.PHONY: download-crds
-download-crds: ## Download CRDs from the API module release.
-	@mkdir -p config/crd/bases
-	curl -sSL -o config/crd/bases/crds.yaml \
-		https://github.com/otterscale/api/releases/download/$(API_VERSION)/crds.yaml
+	"$(CONTROLLER_GEN)" object:headerFile="hack/boilerplate.go.txt",year=$(YEAR) paths="./..."
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.
@@ -69,11 +63,13 @@ vet: ## Run go vet against code.
 	go vet ./...
 
 .PHONY: test
-test: manifests generate download-crds fmt vet setup-envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v '/e2e\|/cmd\|/test') -coverprofile coverage.txt
+test: manifests generate fmt vet setup-envtest ## Run tests.
+	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
 # The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
+# kubectl kuberc is disabled by default for test isolation; enable with:
+# - KUBECTL_KUBERC=true
 # CertManager is installed by default; skip with:
 # - CERT_MANAGER_INSTALL_SKIP=true
 KIND_CLUSTER ?= tenant-operator-test-e2e
@@ -93,7 +89,7 @@ setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
 	esac
 
 .PHONY: test-e2e
-test-e2e: setup-test-e2e manifests generate download-crds fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
+test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
 	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) go test -tags=e2e ./test/e2e/ -v -ginkgo.v
 	$(MAKE) cleanup-test-e2e
 
@@ -166,7 +162,7 @@ endif
 .PHONY: install
 install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.
 	@out="$$( "$(KUSTOMIZE)" build config/crd 2>/dev/null || true )"; \
-	if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" apply --server-side -f -; else echo "No CRDs to install; skipping."; fi
+	if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" apply -f -; else echo "No CRDs to install; skipping."; fi
 
 .PHONY: uninstall
 uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
@@ -176,7 +172,7 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 .PHONY: deploy
 deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
 	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" apply --server-side -f -
+	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" apply -f -
 
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
@@ -199,19 +195,19 @@ GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.8.1
-CONTROLLER_TOOLS_VERSION ?= v0.20.1
+CONTROLLER_TOOLS_VERSION ?= v0.21.0
 
-#ENVTEST_VERSION is the version of controller-runtime release branch to fetch the envtest setup script (i.e. release-0.20)
+#ENVTEST_VERSION is the controller-runtime version to use for setup-envtest, derived from go.mod
 ENVTEST_VERSION ?= $(shell v='$(call gomodver,sigs.k8s.io/controller-runtime)'; \
   [ -n "$$v" ] || { echo "Set ENVTEST_VERSION manually (controller-runtime replace has no tag)" >&2; exit 1; }; \
-  printf '%s\n' "$$v" | sed -E 's/^v?([0-9]+)\.([0-9]+).*/release-\1.\2/')
+  printf '%s\n' "$$v")
 
 #ENVTEST_K8S_VERSION is the version of Kubernetes to use for setting up ENVTEST binaries (i.e. 1.31)
 ENVTEST_K8S_VERSION ?= $(shell v='$(call gomodver,k8s.io/api)'; \
   [ -n "$$v" ] || { echo "Set ENVTEST_K8S_VERSION manually (k8s.io/api replace has no tag)" >&2; exit 1; }; \
   printf '%s\n' "$$v" | sed -E 's/^v?[0-9]+\.([0-9]+).*/1.\1/')
 
-GOLANGCI_LINT_VERSION ?= v2.11.4
+GOLANGCI_LINT_VERSION ?= v2.12.2
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
 $(KUSTOMIZE): $(LOCALBIN)
@@ -262,5 +258,5 @@ ln -sf "$$(realpath "$(1)-$(3)")" "$(1)"
 endef
 
 define gomodver
-$(shell GOWORK=off go list -m -f '{{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}' $(1) 2>/dev/null)
+$(shell go list -m -f '{{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}' $(1) 2>/dev/null)
 endef
