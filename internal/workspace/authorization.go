@@ -26,7 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/validate/content"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
+	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
 )
 
 // OperatorServiceAccountIdentity constructs the full Kubernetes service account

@@ -27,7 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	tenantv1alpha1 "github.com/otterscale/api/tenant/v1alpha1"
+	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
 	"github.com/otterscale/tenant-operator/internal/workspace"
 
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -37,12 +37,11 @@ import (
 // operatorSA is the full service account identity of the controller-manager
 // (e.g. "system:serviceaccount:otterscale-system:tenant-operator-controller-manager")
 // used to exempt the operator's own reconciliation updates from workspace-level authorization.
-func SetupWorkspaceWebhookWithManager(mgr ctrl.Manager, operatorSA string) error {
+func SetupWorkspaceWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr, &tenantv1alpha1.Workspace{}).
 		WithDefaulter(&WorkspaceCustomDefaulter{}).
 		WithValidator(&WorkspaceCustomValidator{
-			OperatorSA: operatorSA,
-			Reader:     mgr.GetClient(),
+			Reader: mgr.GetClient(),
 		}).
 		Complete()
 }
