@@ -24,7 +24,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -50,7 +49,7 @@ func platformGateway(namespace string, addresses ...string) *gatewayv1.Gateway {
 		specAddresses = append(specAddresses, gatewayv1.GatewaySpecAddress{Value: address})
 	}
 	return &gatewayv1.Gateway{
-		ObjectMeta: metav1.ObjectMeta{Name: PlatformGatewayName, Namespace: namespace},
+		Name: PlatformGatewayName, Namespace: namespace,
 		Spec: gatewayv1.GatewaySpec{
 			GatewayClassName: "envoy",
 			Addresses:        specAddresses,
@@ -160,7 +159,7 @@ func TestIsEndpointSourceGateway(t *testing.T) {
 			t.Parallel()
 
 			got := IsEndpointSourceGateway(&gatewayv1.Gateway{
-				ObjectMeta: metav1.ObjectMeta{Name: tt.gwName, Namespace: tt.namespace},
+				Name: tt.gwName, Namespace: tt.namespace,
 			})
 			if got != tt.want {
 				t.Errorf("IsEndpointSourceGateway(%s/%s) = %v, want %v", tt.namespace, tt.gwName, got, tt.want)
@@ -175,7 +174,7 @@ func TestIsEndpointSourceGateway(t *testing.T) {
 
 func modelGateway(listeners ...gatewayv1.Listener) *gatewayv1.Gateway {
 	return &gatewayv1.Gateway{
-		ObjectMeta: metav1.ObjectMeta{Name: ModelGatewayName, Namespace: ModelGatewayNamespace},
+		Name: ModelGatewayName, Namespace: ModelGatewayNamespace,
 		Spec: gatewayv1.GatewaySpec{
 			GatewayClassName: "envoy",
 			Listeners:        listeners,

@@ -24,7 +24,6 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -41,7 +40,7 @@ func newNamespaceReader(names ...string) client.Reader {
 
 	existing := make([]runtime.Object, 0, len(names))
 	for _, name := range names {
-		existing = append(existing, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}})
+		existing = append(existing, &corev1.Namespace{Name: name})
 	}
 	return fake.NewClientBuilder().WithScheme(s).WithRuntimeObjects(existing...).Build()
 }
@@ -72,7 +71,7 @@ var _ = Describe("Workspace Webhook", func() {
 
 	BeforeEach(func() {
 		obj = &tenantv1alpha1.Workspace{
-			ObjectMeta: metav1.ObjectMeta{Name: "test-workspace"},
+			Name: "test-workspace",
 			Spec: tenantv1alpha1.WorkspaceSpec{
 				Namespace: "test-ns",
 				Members: []tenantv1alpha1.WorkspaceMember{

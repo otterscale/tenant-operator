@@ -20,7 +20,6 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -33,11 +32,9 @@ func endpointSourceGateway(addresses ...string) *gatewayv1.Gateway {
 		specAddresses = append(specAddresses, gatewayv1.GatewaySpecAddress{Value: address})
 	}
 	return &gatewayv1.Gateway{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      ws.PlatformGatewayName,
-			Namespace: ws.PlatformGatewayNamespace,
-		},
-		Spec: gatewayv1.GatewaySpec{Addresses: specAddresses},
+		Name:      ws.PlatformGatewayName,
+		Namespace: ws.PlatformGatewayNamespace,
+		Spec:      gatewayv1.GatewaySpec{Addresses: specAddresses},
 	}
 }
 
@@ -45,7 +42,7 @@ func TestGatewayChangedPredicate(t *testing.T) {
 	t.Parallel()
 
 	unrelated := &gatewayv1.Gateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: ws.PlatformGatewayNamespace},
+		Name: "unrelated", Namespace: ws.PlatformGatewayNamespace,
 	}
 	p := gatewayChangedPredicate()
 
@@ -98,11 +95,9 @@ func TestGatewayChangedPredicate(t *testing.T) {
 
 func operatorConfigMap(data map[string]string) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      ws.OperatorConfigName,
-			Namespace: ws.OperatorNamespace,
-		},
-		Data: data,
+		Name:      ws.OperatorConfigName,
+		Namespace: ws.OperatorNamespace,
+		Data:      data,
 	}
 }
 
@@ -110,8 +105,8 @@ func TestOperatorConfigChangedPredicate(t *testing.T) {
 	t.Parallel()
 
 	otherConfig := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: ws.ConfigName, Namespace: "workspace-a"},
-		Data:       map[string]string{ws.RancherProjectIDKey: "c-m-abcde:p-vwxyz"},
+		Name: ws.ConfigName, Namespace: "workspace-a",
+		Data: map[string]string{ws.RancherProjectIDKey: "c-m-abcde:p-vwxyz"},
 	}
 	p := operatorConfigChangedPredicate()
 
@@ -162,10 +157,8 @@ func TestOperatorConfigChangedPredicate(t *testing.T) {
 
 func operatorSecret() *corev1.Secret {
 	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      ws.OperatorSecretName,
-			Namespace: ws.OperatorNamespace,
-		},
+		Name:      ws.OperatorSecretName,
+		Namespace: ws.OperatorNamespace,
 		Data: map[string][]byte{
 			ws.HarborURLKey:         []byte("https://harbor.example.com"),
 			ws.HarborRobotNameKey:   []byte("robot$otterscale"),
@@ -178,8 +171,8 @@ func TestOperatorSecretChangedPredicate(t *testing.T) {
 	t.Parallel()
 
 	otherSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: ws.ImagePullSecretName, Namespace: "workspace-a"},
-		Data:       map[string][]byte{ws.HarborURLKey: []byte("https://harbor.example.com")},
+		Name: ws.ImagePullSecretName, Namespace: "workspace-a",
+		Data: map[string][]byte{ws.HarborURLKey: []byte("https://harbor.example.com")},
 	}
 	p := operatorSecretChangedPredicate()
 

@@ -29,7 +29,6 @@ import (
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/validate/content"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -50,10 +49,8 @@ func newWorkspaceWithName(name, namespace string, members []tenantv1alpha1.Works
 		labels[workspace.UserLabelPrefix+m.Subject] = "true"
 	}
 	return &tenantv1alpha1.Workspace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:   name,
-			Labels: labels,
-		},
+		Name:   name,
+		Labels: labels,
 		Spec: tenantv1alpha1.WorkspaceSpec{
 			Namespace: namespace,
 			Members:   members,
@@ -311,7 +308,7 @@ var _ = Describe("ValidateNamespaceAvailable", func() {
 	})
 
 	newNamespace := func(name string) *corev1.Namespace {
-		return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
+		return &corev1.Namespace{Name: name}
 	}
 
 	It("should allow a namespace nothing has created yet", func() {

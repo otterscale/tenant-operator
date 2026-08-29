@@ -141,13 +141,11 @@ func TestReconcileHelmRepositoryIsIdempotent(t *testing.T) {
 
 func TestReconcileHelmRepositoryCorrectsLibraryDrift(t *testing.T) {
 	library := &sourcev1.HelmRepository{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      HarborDefaultProjectName,
-			Namespace: "test-namespace",
-			Labels: map[string]string{
-				LabelFromHarbor: "false",
-				LabelInternal:   labelValueTrue,
-			},
+		Name:      HarborDefaultProjectName,
+		Namespace: "test-namespace",
+		Labels: map[string]string{
+			LabelFromHarbor: "false",
+			LabelInternal:   labelValueTrue,
 		},
 		Spec: sourcev1.HelmRepositorySpec{
 			SecretRef: &meta.LocalObjectReference{Name: "wrong-secret"},
@@ -206,10 +204,8 @@ func newHelmRepositoryTestClient(t *testing.T, objects ...client.Object) (client
 	}
 
 	w := &tenantv1alpha1.Workspace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "test-workspace",
-			UID:  types.UID("test-workspace-uid"),
-		},
+		Name: "test-workspace",
+		UID:  types.UID("test-workspace-uid"),
 		Spec: tenantv1alpha1.WorkspaceSpec{
 			Namespace: "test-namespace",
 		},

@@ -30,7 +30,6 @@ import (
 	. "github.com/onsi/gomega"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -154,13 +153,11 @@ var _ = BeforeSuite(func() {
 	// before reaching any other resource. Specs pair this with a fake
 	// harbor.Client, so the values are never dialled.
 	Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: ws.OperatorNamespace},
+		Name: ws.OperatorNamespace,
 	}))).To(Succeed())
 	Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      ws.OperatorSecretName,
-			Namespace: ws.OperatorNamespace,
-		},
+		Name:      ws.OperatorSecretName,
+		Namespace: ws.OperatorNamespace,
 		Data: map[string][]byte{
 			ws.HarborURLKey:         []byte("https://harbor.example.com"),
 			ws.HarborRobotNameKey:   []byte("robot$otterscale"),

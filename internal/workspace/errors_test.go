@@ -87,7 +87,7 @@ func failWritesClient(t *testing.T, objs ...client.Object) client.Client {
 
 func workspaceForErrorTest() *tenantv1alpha1.Workspace {
 	return &tenantv1alpha1.Workspace{
-		ObjectMeta: metav1.ObjectMeta{Name: "ws-errors", UID: "ws-errors-uid"},
+		Name: "ws-errors", UID: "ws-errors-uid",
 		Spec: tenantv1alpha1.WorkspaceSpec{
 			Namespace: "ns-errors",
 			Members: []tenantv1alpha1.WorkspaceMember{
@@ -245,14 +245,12 @@ func TestReconcileNamespaceConflictSurvivesWrapping(t *testing.T) {
 
 	w := workspaceForErrorTest()
 	occupied := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            w.Spec.Namespace,
-			OwnerReferences: []metav1.OwnerReference{{UID: "somebody-else"}},
-			// The guard keys off a non-zero CreationTimestamp to tell an existing
-			// namespace from the empty object CreateOrUpdate builds before a
-			// create, and the fake client does not set one.
-			CreationTimestamp: metav1.Now(),
-		},
+		Name:            w.Spec.Namespace,
+		OwnerReferences: []metav1.OwnerReference{{UID: "somebody-else"}},
+		// The guard keys off a non-zero CreationTimestamp to tell an existing
+		// namespace from the empty object CreateOrUpdate builds before a
+		// create, and the fake client does not set one.
+		CreationTimestamp: metav1.Now(),
 	}
 
 	scheme := runtime.NewScheme()
@@ -265,8 +263,7 @@ func TestReconcileNamespaceConflictSurvivesWrapping(t *testing.T) {
 		t.Fatal("expected a conflict error, got nil")
 	}
 
-	var conflict *NamespaceConflictError
-	if !errors.As(err, &conflict) {
+	if _, ok := errors.AsType[*NamespaceConflictError](err); !ok {
 		t.Fatalf("error = %q, want errors.As to still find NamespaceConflictError", err)
 	}
 	if !strings.Contains(err.Error(), "reconciling Namespace") {

@@ -98,8 +98,8 @@ func TestReconcileNamespaceRancherProjectID(t *testing.T) {
 	t.Run("does not add the annotation when the key is absent", func(t *testing.T) {
 		w, c, scheme := newNamespaceTest(t, "")
 		if err := c.Create(context.Background(), &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Name: OperatorConfigName, Namespace: OperatorNamespace},
-			Data:       map[string]string{"ServiceEndpoint": "10.0.0.1"},
+			Name: OperatorConfigName, Namespace: OperatorNamespace,
+			Data: map[string]string{"ServiceEndpoint": "10.0.0.1"},
 		}); err != nil {
 			t.Fatalf("create global config: %v", err)
 		}
@@ -151,10 +151,8 @@ func newNamespaceTest(t *testing.T, rancherProjectID string) (*tenantv1alpha1.Wo
 	}
 
 	w := &tenantv1alpha1.Workspace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "workspace-a",
-			UID:  types.UID("workspace-a-uid"),
-		},
+		Name: "workspace-a",
+		UID:  types.UID("workspace-a-uid"),
 		Spec: tenantv1alpha1.WorkspaceSpec{
 			Namespace: "workspace-a",
 		},
@@ -163,11 +161,9 @@ func newNamespaceTest(t *testing.T, rancherProjectID string) (*tenantv1alpha1.Wo
 	builder := fake.NewClientBuilder().WithScheme(scheme)
 	if rancherProjectID != "" {
 		builder = builder.WithObjects(&corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      OperatorConfigName,
-				Namespace: OperatorNamespace,
-			},
-			Data: map[string]string{RancherProjectIDKey: rancherProjectID},
+			Name:      OperatorConfigName,
+			Namespace: OperatorNamespace,
+			Data:      map[string]string{RancherProjectIDKey: rancherProjectID},
 		})
 	}
 
