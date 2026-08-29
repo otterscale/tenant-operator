@@ -195,11 +195,23 @@ func (r *WorkspaceReconciler) handleReconcileError(ctx context.Context, w *tenan
 	var nce *workspace.NamespaceConflictError
 	if errors.As(err, &nce) {
 		patchErr := r.setReadyConditionFalse(ctx, w, "NamespaceConflict", err.Error())
-		r.Recorder.Eventf(w, nil, corev1.EventTypeWarning, "NamespaceConflict", "Reconcile", err.Error())
+		r.eventf(w, corev1.EventTypeWarning, "NamespaceConflict", err.Error())
 		if patchErr != nil {
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
 		return ctrl.Result{}, nil
+	}
+
+	// A write conflict is the API server's optimistic lock, not a workspace
+	// problem: every domain sync reads then writes, so any concurrent write to a
+	// managed resource lands here. The fan-out watches make that routine, so it
+	// is handed straight back for the rate-limited retry (which starts at 5ms —
+	// exactly the re-read a conflict asks for) without touching the status or
+	// emitting an event. Reporting Ready=False and a Warning for a collision the
+	// next attempt resolves would just teach users to ignore both.
+	if apierrors.IsConflict(err) {
+		log.FromContext(ctx).V(1).Info("Retrying after a conflicting write", "error", err.Error())
+		return ctrl.Result{}, err
 	}
 
 	// Transient error: surface it on the status, then hand the original error back
@@ -208,8 +220,18 @@ func (r *WorkspaceReconciler) handleReconcileError(ctx context.Context, w *tenan
 	// already a retry coming, and reporting the patch error instead would lose
 	// the reason the reconcile actually failed.
 	_ = r.setReadyConditionFalse(ctx, w, "ReconcileError", err.Error())
-	r.Recorder.Eventf(w, nil, corev1.EventTypeWarning, "ReconcileError", "Reconcile", err.Error())
+	r.eventf(w, corev1.EventTypeWarning, "ReconcileError", err.Error())
 	return ctrl.Result{}, err
+}
+
+// eventf records an event whose note is a message already assembled elsewhere.
+//
+// EventRecorder.Eventf treats note as a format string, so passing an error text
+// straight through renders any %-verb it happens to contain as %!s(MISSING) —
+// and Harbor error notes carry response bodies, where percent-encoding is
+// common. The message goes through a %s placeholder instead.
+func (r *WorkspaceReconciler) eventf(w *tenantv1alpha1.Workspace, eventType, reason, message string) {
+	r.Recorder.Eventf(w, nil, eventType, reason, "Reconcile", "%s", message)
 }
 
 // observedRef returns a reference to name/namespace once that object is actually

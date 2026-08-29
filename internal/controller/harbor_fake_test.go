@@ -36,6 +36,10 @@ type fakeHarborClient struct {
 	// robotExists makes EnsureRobotAccount report the robot as pre-existing,
 	// which suppresses image pull Secret creation.
 	robotExists bool
+	// desiredMembers records what the last ReconcileProjectMembers was asked to
+	// sync, so specs can assert on the identity a member is given in Harbor —
+	// which the Workspace spec can decouple from the RBAC subject.
+	desiredMembers []harbor.ProjectMember
 }
 
 func (f *fakeHarborClient) EnsureProject(_ context.Context, _ string) error {
@@ -43,8 +47,9 @@ func (f *fakeHarborClient) EnsureProject(_ context.Context, _ string) error {
 }
 
 func (f *fakeHarborClient) ReconcileProjectMembers(
-	_ context.Context, _ string, _ []harbor.ProjectMember,
+	_ context.Context, _ string, desired []harbor.ProjectMember,
 ) ([]string, error) {
+	f.desiredMembers = desired
 	return f.missingUsers, nil
 }
 

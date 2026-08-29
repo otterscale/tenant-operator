@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	goerrors "errors"
 	"net/http"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/client-go/rest"
@@ -41,6 +43,7 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
+	"github.com/otterscale/tenant-operator/internal/harbor"
 	"github.com/otterscale/tenant-operator/internal/labels"
 	ws "github.com/otterscale/tenant-operator/internal/workspace"
 )
@@ -189,6 +192,19 @@ var _ = Describe("Workspace Controller", func() {
 			fetchResource(workspace, resourceName, "")
 			Expect(workspace.Status.ImagePullSecretRef).To(BeNil(),
 				"status must not advertise an image pull secret that was never written")
+		})
+
+		// Harbor federates against the same OIDC provider as the cluster, so a
+		// member's RBAC subject is already the name Harbor knows it by — there is
+		// no second identity to carry. Pinning the value that actually reaches
+		// the Harbor client keeps that assumption checkable rather than implied.
+		It("should identify a member in Harbor by its RBAC subject", func() {
+			fullyReconcile()
+
+			Expect(harborFake.desiredMembers).To(ConsistOf(harbor.ProjectMember{
+				Username: adminUser,
+				RoleID:   harbor.RoleProjectAdmin,
+			}))
 		})
 
 		It("should report pending Harbor members on the Ready condition", func() {
@@ -379,6 +395,57 @@ var _ = Describe("Workspace Controller", func() {
 			Expect(readyCond).NotTo(BeNil())
 			Expect(readyCond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(readyCond.Reason).To(Equal("NamespaceConflict"))
+		})
+	})
+
+	Context("Reconcile Error Classification", func() {
+		// Swaps in a recorder that has seen nothing, so an assertion about the
+		// events one call produced is not confused by the reconcile before it.
+		freshRecorder := func() *events.FakeRecorder {
+			recorder := events.NewFakeRecorder(10)
+			reconciler.Recorder = recorder
+			return recorder
+		}
+
+		// Every domain sync reads then writes, so a concurrent write to any
+		// managed resource surfaces as a 409. The next attempt re-reads and
+		// succeeds, which makes it a retry rather than a workspace failure.
+		It("should retry a conflicting write without touching status or events", func() {
+			fullyReconcile()
+			fetchResource(workspace, resourceName, "")
+			Expect(apimeta.FindStatusCondition(workspace.Status.Conditions, "Ready").Status).
+				To(Equal(metav1.ConditionTrue))
+
+			recorder := freshRecorder()
+			conflict := errors.NewConflict(
+				schema.GroupResource{Resource: "resourcequotas"},
+				ws.ResourceQuotaName,
+				goerrors.New("the object has been modified"))
+
+			result, err := reconciler.handleReconcileError(ctx, workspace, conflict)
+			Expect(err).To(MatchError(conflict), "the conflict is handed back for the rate-limited retry")
+			Expect(result.IsZero()).To(BeTrue())
+			Expect(recorder.Events).To(BeEmpty(), "a routine conflict must not raise a Warning")
+
+			fetchResource(workspace, resourceName, "")
+			Expect(apimeta.FindStatusCondition(workspace.Status.Conditions, "Ready").Status).
+				To(Equal(metav1.ConditionTrue), "Ready must survive a conflict untouched")
+		})
+
+		// EventRecorder.Eventf treats its note as a format string. Harbor error
+		// notes carry response bodies, where percent-encoding is routine.
+		It("should record an error note containing % verbatim", func() {
+			fullyReconcile()
+
+			recorder := freshRecorder()
+			_, err := reconciler.handleReconcileError(ctx, workspace,
+				goerrors.New(`ensuring Harbor project: unexpected status 400: {"message":"bad path /a%2Fb"}`))
+			Expect(err).To(HaveOccurred())
+
+			var note string
+			Eventually(recorder.Events).Should(Receive(&note))
+			Expect(note).To(ContainSubstring("/a%2Fb"))
+			Expect(note).NotTo(ContainSubstring("%!"), "the note must not be re-expanded as a format string")
 		})
 	})
 

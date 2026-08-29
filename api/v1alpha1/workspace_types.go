@@ -57,19 +57,13 @@ type WorkspaceMember struct {
 	Role MemberRole `json:"role"`
 
 	// Subject is the unique identifier of the member (e.g., OIDC subject or username).
-	// This identifier maps directly to the Kubernetes RBAC Subject.
+	// This identifier maps directly to the Kubernetes RBAC Subject, and is also
+	// the member's Harbor identity: Harbor federates against the same OIDC
+	// provider, so the two are the same string by construction.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	// +required
 	Subject string `json:"subject"`
-
-	// Username is the member's Harbor registry username.
-	// When set, this value is used as the Harbor project member identity
-	// instead of Subject.
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=253
-	// +optional
-	Username *string `json:"username,omitempty"`
 
 	// Name is the human-readable display name of the member.
 	// +optional

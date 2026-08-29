@@ -146,7 +146,9 @@ func ReconcileHarbor(
 			continue
 		}
 		harborMembers = append(harborMembers, harbor.ProjectMember{
-			Username: m.Subject, // we use the subject to identify the harbor user
+			// Harbor federates against the same OIDC provider as the cluster, so
+			// the RBAC subject is already the name Harbor knows the user by.
+			Username: m.Subject,
 			RoleID:   harborRoleID(m.Role),
 		})
 	}

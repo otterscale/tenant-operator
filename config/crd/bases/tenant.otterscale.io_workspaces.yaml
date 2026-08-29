@@ -156,15 +156,9 @@ spec:
                     subject:
                       description: |-
                         Subject is the unique identifier of the member (e.g., OIDC subject or username).
-                        This identifier maps directly to the Kubernetes RBAC Subject.
-                      maxLength: 253
-                      minLength: 1
-                      type: string
-                    username:
-                      description: |-
-                        Username is the member's Harbor registry username.
-                        When set, this value is used as the Harbor project member identity
-                        instead of Subject.
+                        This identifier maps directly to the Kubernetes RBAC Subject, and is also
+                        the member's Harbor identity: Harbor federates against the same OIDC
+                        provider, so the two are the same string by construction.
                       maxLength: 253
                       minLength: 1
                       type: string
