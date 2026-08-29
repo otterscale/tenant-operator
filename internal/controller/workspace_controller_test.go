@@ -177,21 +177,44 @@ var _ = Describe("Workspace Controller", func() {
 			Expect(workspace.Status.HelmRepositoryRef.Name).To(Equal(ws.HelmRepositoryName))
 		})
 
-		// A robot that already exists returns no credentials, so the image pull
-		// Secret cannot be built. The status must not claim it exists.
-		It("should leave the image pull secret ref unset when the robot predates the secret", func() {
+		// The robot is created before the Secret is written, so a failure in
+		// between leaves a robot with no recoverable credentials. Harbor reveals
+		// a secret only when it sets one, so the way back is to have it issue a
+		// new one. Without that the workspace could never pull again, and
+		// spec.namespace being immutable means it could not even be recreated
+		// under a different name.
+		It("should rebuild a missing image pull secret by refreshing the robot secret", func() {
 			harborFake.robotExists = true
 
 			fullyReconcile()
 
-			err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: ws.ImagePullSecretName, Namespace: namespaceName},
-				&corev1.Secret{})
-			Expect(errors.IsNotFound(err)).To(BeTrue(), "no credentials means no image pull secret")
+			Expect(harborFake.refreshes).To(Equal(1), "a missing Secret must trigger exactly one refresh")
+
+			var pullSecret corev1.Secret
+			fetchResource(&pullSecret, ws.ImagePullSecretName, namespaceName)
+			Expect(pullSecret.Data).To(HaveKey(corev1.DockerConfigJsonKey))
+			Expect(string(pullSecret.Data[corev1.DockerConfigJsonKey])).
+				To(ContainSubstring("refreshed-robot-secret"), "the rebuilt Secret must carry the new credentials")
 
 			fetchResource(workspace, resourceName, "")
-			Expect(workspace.Status.ImagePullSecretRef).To(BeNil(),
-				"status must not advertise an image pull secret that was never written")
+			Expect(workspace.Status.ImagePullSecretRef).NotTo(BeNil())
+		})
+
+		// Refreshing invalidates the live secret, so it must happen only when
+		// there is nothing to lose. A later reconcile of a healthy workspace
+		// must leave the credentials alone.
+		It("should not refresh the robot secret while the image pull secret is intact", func() {
+			fullyReconcile() // creates the robot and writes the Secret
+
+			harborFake.robotExists = true
+			executeReconcile()
+
+			Expect(harborFake.refreshes).To(BeZero(), "an intact Secret must never be rotated out from under its users")
+
+			var pullSecret corev1.Secret
+			fetchResource(&pullSecret, ws.ImagePullSecretName, namespaceName)
+			Expect(string(pullSecret.Data[corev1.DockerConfigJsonKey])).
+				To(ContainSubstring("fake-robot-secret"), "the original credentials must survive")
 		})
 
 		// Harbor federates against the same OIDC provider as the cluster, so a

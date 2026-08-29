@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/otterscale/tenant-operator/internal/harbor"
 )
@@ -33,13 +34,24 @@ type fakeHarborClient struct {
 	// missingUsers is returned from ReconcileProjectMembers so specs can drive
 	// the HarborMembersPending path.
 	missingUsers []string
-	// robotExists makes EnsureRobotAccount report the robot as pre-existing,
-	// which suppresses image pull Secret creation.
+	// robotExists makes EnsureRobot report the robot as pre-existing, so it
+	// returns no credentials — the state that forces the caller to decide
+	// between leaving the image pull Secret alone and refreshing the secret.
 	robotExists bool
 	// desiredMembers records what the last ReconcileProjectMembers was asked to
-	// sync, so specs can assert on the identity a member is given in Harbor —
-	// which the Workspace spec can decouple from the RBAC subject.
+	// sync, so specs can assert on the identity a member is given in Harbor.
 	desiredMembers []harbor.ProjectMember
+	// refreshes counts RefreshRobotSecret calls. Refreshing invalidates the
+	// live credentials, so specs assert on when it happens, not only that the
+	// Secret ends up present.
+	refreshes int
+}
+
+// robotFullName mirrors Harbor's naming for a project-level robot. The real
+// client returns this form, so the fake must too — a fake that answered
+// "robot$<robot>" would let a mismatch in the docker config username through.
+func robotFullName(projectName, robotName string) string {
+	return fmt.Sprintf("robot$%s+%s", projectName, robotName)
 }
 
 func (f *fakeHarborClient) EnsureProject(_ context.Context, _ string) error {
@@ -53,16 +65,28 @@ func (f *fakeHarborClient) ReconcileProjectMembers(
 	return f.missingUsers, nil
 }
 
-func (f *fakeHarborClient) EnsureRobotAccount(
-	_ context.Context, _ string, robotName string,
-) (*harbor.RobotCredentials, bool, error) {
+func (f *fakeHarborClient) EnsureRobot(
+	_ context.Context, projectName, robotName string,
+) (*harbor.RobotCredentials, error) {
 	if f.robotExists {
-		return nil, false, nil
+		return nil, nil
 	}
 	return &harbor.RobotCredentials{
-		Name:   "robot$" + robotName,
+		Name:   robotFullName(projectName, robotName),
 		Secret: "fake-robot-secret",
-	}, true, nil
+	}, nil
+}
+
+func (f *fakeHarborClient) RefreshRobotSecret(
+	_ context.Context, projectName, robotName string,
+) (*harbor.RobotCredentials, error) {
+	f.refreshes++
+	return &harbor.RobotCredentials{
+		Name: robotFullName(projectName, robotName),
+		// Distinct from the create-path secret so specs can tell which call the
+		// Secret's contents came from.
+		Secret: "refreshed-robot-secret",
+	}, nil
 }
 
 // newFakeHarborClient returns the factory the reconciler uses to build its

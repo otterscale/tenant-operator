@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -160,50 +161,44 @@ func ReconcileHarbor(
 		logger.Info("Some Harbor users do not exist yet; skipping and will retry on next reconcile", "missing", missingMembers)
 	}
 
-	// 3. Ensure robot account exists
-	creds, created, err := harborClient.EnsureRobotAccount(ctx, projectName, robotName)
+	// 3. Ensure the robot account exists, and end up holding credentials for it.
+	creds, err := harborClient.EnsureRobot(ctx, projectName, robotName)
 	if err != nil {
 		return nil, fmt.Errorf("ensuring Harbor robot account: %w", err)
 	}
 
-	// 3. Create docker-registry Secret only when robot was newly created
-	if created {
-		dockerConfigJSON, err := buildDockerConfigJSON(harborURL, creds.Name, creds.Secret)
+	// A robot that was already there yields no credentials — Harbor reveals a
+	// secret only at the moment it sets one. That is fine while the image pull
+	// Secret written when the robot was created is still present. When it is
+	// not, having Harbor issue a new secret is the only way back.
+	//
+	// The gap is not just manual deletion: the robot is created before the
+	// Secret is written, so any failure in between (a conflict, a restart)
+	// leaves exactly this state. Without the refresh the workspace would be
+	// permanently unable to pull, and nothing short of deleting the Workspace
+	// would fix it.
+	if creds == nil {
+		missing, err := imagePullSecretMissing(ctx, c, w.Spec.Namespace)
 		if err != nil {
-			return nil, fmt.Errorf("building docker config JSON: %w", err)
+			return nil, err
 		}
-
-		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      ImagePullSecretName,
-				Namespace: w.Spec.Namespace,
-			},
-		}
-
-		op, err := ctrlutil.CreateOrUpdate(ctx, c, secret, func() error {
-			secret.Labels = LabelsForWorkspace(w.Name, version)
-			secret.Type = corev1.SecretTypeDockerConfigJson
-			secret.Data = map[string][]byte{
-				corev1.DockerConfigJsonKey: dockerConfigJSON,
+		if missing {
+			logger.Info("Image pull Secret is missing; refreshing the Harbor robot secret to rebuild it",
+				"robot", robotName)
+			creds, err = harborClient.RefreshRobotSecret(ctx, projectName, robotName)
+			if err != nil {
+				return nil, fmt.Errorf("refreshing Harbor robot secret: %w", err)
 			}
-			return ctrlutil.SetControllerReference(w, secret, scheme)
-		})
-		if err != nil {
-			return nil, fmt.Errorf("reconciling image pull Secret: %w", err)
 		}
-		if op != ctrlutil.OperationResultNone {
-			logger.Info("Image pull Secret reconciled", "operation", op, "name", secret.Name)
-		}
-	} else {
-		// Robot already exists — ensure the Secret exists (it should have been created previously).
-		// If the Secret is missing (e.g. manually deleted), we cannot recreate it without
-		// regenerating the robot credentials. Log a warning for observability.
-		secret := &corev1.Secret{}
-		if err := c.Get(ctx, types.NamespacedName{Name: ImagePullSecretName, Namespace: w.Spec.Namespace}, secret); err != nil {
-			if client.IgnoreNotFound(err) != nil {
-				return nil, fmt.Errorf("checking image pull Secret: %w", err)
-			}
-			logger.Info("Image pull Secret missing but Harbor robot already exists, Secret cannot be recreated without regenerating robot credentials")
+	}
+
+	// 4. Write the docker-registry Secret whenever this reconcile obtained
+	//    credentials. Refreshing invalidated the previous secret, so a failure
+	//    here leaves the Secret missing and the next reconcile refreshes again —
+	//    the loop converges instead of getting stuck.
+	if creds != nil {
+		if err := reconcileImagePullSecret(ctx, c, scheme, w, version, harborURL, creds); err != nil {
+			return nil, err
 		}
 	}
 
@@ -213,6 +208,62 @@ func ReconcileHarbor(
 	}
 
 	return missingMembers, nil
+}
+
+// imagePullSecretMissing reports whether the workspace's image pull Secret is
+// absent. A read failure is returned rather than reported as missing: refreshing
+// the robot secret invalidates the live one, so it must not be triggered by a
+// transient API error.
+func imagePullSecretMissing(ctx context.Context, c client.Client, namespace string) (bool, error) {
+	key := types.NamespacedName{Name: ImagePullSecretName, Namespace: namespace}
+	err := c.Get(ctx, key, &corev1.Secret{})
+	if apierrors.IsNotFound(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("checking image pull Secret: %w", err)
+	}
+	return false, nil
+}
+
+// reconcileImagePullSecret writes the docker-registry Secret the workspace's
+// pods and its Flux HelmRepository authenticate to Harbor with.
+func reconcileImagePullSecret(
+	ctx context.Context,
+	c client.Client,
+	scheme *runtime.Scheme,
+	w *tenantv1alpha1.Workspace,
+	version string,
+	harborURL string,
+	creds *harbor.RobotCredentials,
+) error {
+	dockerConfigJSON, err := buildDockerConfigJSON(harborURL, creds.Name, creds.Secret)
+	if err != nil {
+		return fmt.Errorf("building docker config JSON: %w", err)
+	}
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ImagePullSecretName,
+			Namespace: w.Spec.Namespace,
+		},
+	}
+
+	op, err := ctrlutil.CreateOrUpdate(ctx, c, secret, func() error {
+		secret.Labels = LabelsForWorkspace(w.Name, version)
+		secret.Type = corev1.SecretTypeDockerConfigJson
+		secret.Data = map[string][]byte{
+			corev1.DockerConfigJsonKey: dockerConfigJSON,
+		}
+		return ctrlutil.SetControllerReference(w, secret, scheme)
+	})
+	if err != nil {
+		return fmt.Errorf("reconciling image pull Secret: %w", err)
+	}
+	if op != ctrlutil.OperationResultNone {
+		log.FromContext(ctx).Info("Image pull Secret reconciled", "operation", op, "name", secret.Name)
+	}
+	return nil
 }
 
 // defaultServiceAccountName is the ServiceAccount Kubernetes assigns to pods

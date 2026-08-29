@@ -41,6 +41,11 @@ const (
 	RoleGuest        int = 3
 )
 
+// robotsPath is the collection endpoint for robot accounts. Robots are addressed
+// cluster-wide even when they belong to a project, so this is not under
+// /projects/{name}.
+const robotsPath = "/api/v2.0/robots"
+
 // Client defines the operations needed for workspace Harbor integration.
 type Client interface {
 	// EnsureProject ensures a Harbor project with the given name exists.
@@ -56,10 +61,21 @@ type Client interface {
 	// unrecoverable failures.
 	ReconcileProjectMembers(ctx context.Context, projectName string, desired []ProjectMember) (missingUsers []string, err error)
 
-	// EnsureRobotAccount ensures a robot account exists for the given project.
-	// Returns the credentials and whether the robot was newly created.
-	// If the robot already exists, created is false and credentials are nil.
-	EnsureRobotAccount(ctx context.Context, projectName string, robotName string) (creds *RobotCredentials, created bool, err error)
+	// EnsureRobot ensures the project's robot account exists.
+	//
+	// Credentials come back only when this call created the robot: Harbor
+	// reveals a robot secret at the moment it sets one and never again. A nil
+	// RobotCredentials therefore means "the robot was already there", not
+	// "failed" — callers that need credentials for it must ask
+	// RefreshRobotSecret for a new secret.
+	EnsureRobot(ctx context.Context, projectName string, robotName string) (*RobotCredentials, error)
+
+	// RefreshRobotSecret has Harbor issue a new secret for an existing robot and
+	// returns it. This invalidates the robot's previous secret, so it is meant
+	// for rebuilding credentials that were lost rather than for routine use.
+	//
+	// It is an error to refresh a robot that does not exist.
+	RefreshRobotSecret(ctx context.Context, projectName string, robotName string) (*RobotCredentials, error)
 }
 
 // ProjectMember represents a desired Harbor project member.
@@ -259,15 +275,15 @@ func (c *httpClient) deleteProjectMember(ctx context.Context, basePath string, m
 	return nil
 }
 
-// EnsureRobotAccount ensures a robot account exists for the given project.
-func (c *httpClient) EnsureRobotAccount(ctx context.Context, projectName string, robotName string) (*RobotCredentials, bool, error) {
-	// Check if robot already exists
-	exists, err := c.robotExists(ctx, projectName, robotName)
+// EnsureRobot ensures a robot account exists for the given project, returning
+// its credentials only when this call created it.
+func (c *httpClient) EnsureRobot(ctx context.Context, projectName string, robotName string) (*RobotCredentials, error) {
+	existing, err := c.findRobot(ctx, projectName, robotName)
 	if err != nil {
-		return nil, false, fmt.Errorf("checking Harbor robot existence: %w", err)
+		return nil, fmt.Errorf("checking Harbor robot existence: %w", err)
 	}
-	if exists {
-		return nil, false, nil
+	if existing != nil {
+		return nil, nil
 	}
 
 	// Create robot account
@@ -287,9 +303,9 @@ func (c *httpClient) EnsureRobotAccount(ctx context.Context, projectName string,
 		},
 	}
 
-	resp, err := c.doJSON(ctx, http.MethodPost, "/api/v2.0/robots", body)
+	resp, err := c.doJSON(ctx, http.MethodPost, robotsPath, body)
 	if err != nil {
-		return nil, false, fmt.Errorf("creating Harbor robot account: %w", err)
+		return nil, fmt.Errorf("creating Harbor robot account: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -297,10 +313,12 @@ func (c *httpClient) EnsureRobotAccount(ctx context.Context, projectName string,
 	case http.StatusCreated:
 		// fall through to decode credentials
 	case http.StatusConflict:
-		// Robot was created between our check and create — idempotent success
-		return nil, false, nil
+		// Robot was created between our check and create. Its secret went to
+		// whoever won that race, so this call has none to report — same state as
+		// finding it already there.
+		return nil, nil
 	default:
-		return nil, false, c.unexpectedStatus("creating Harbor robot account", resp)
+		return nil, c.unexpectedStatus("creating Harbor robot account", resp)
 	}
 
 	var result struct {
@@ -308,13 +326,69 @@ func (c *httpClient) EnsureRobotAccount(ctx context.Context, projectName string,
 		Secret string `json:"secret"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, false, fmt.Errorf("decoding Harbor robot response: %w", err)
+		return nil, fmt.Errorf("decoding Harbor robot response: %w", err)
 	}
 
 	return &RobotCredentials{
 		Name:   result.Name,
 		Secret: result.Secret,
-	}, true, nil
+	}, nil
+}
+
+// RefreshRobotSecret has Harbor issue a new secret for the project's existing
+// robot account and returns the resulting credentials.
+func (c *httpClient) RefreshRobotSecret(ctx context.Context, projectName string, robotName string) (*RobotCredentials, error) {
+	existing, err := c.findRobot(ctx, projectName, robotName)
+	if err != nil {
+		return nil, fmt.Errorf("finding Harbor robot to refresh: %w", err)
+	}
+	if existing == nil {
+		return nil, fmt.Errorf("refreshing Harbor robot secret: robot %q does not exist in project %q",
+			robotName, projectName)
+	}
+
+	secret, err := c.refreshRobotSecret(ctx, existing.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	// The refresh response carries only the secret, so the name comes from the
+	// robot Harbor matched rather than being rebuilt from the arguments.
+	return &RobotCredentials{Name: existing.Name, Secret: secret}, nil
+}
+
+// refreshRobotSecret is Harbor's RefreshSec operation: PATCH the robot with an
+// empty RobotSec body and Harbor generates a secret and returns it. Letting
+// Harbor generate it avoids having to satisfy its password policy here.
+//
+// This is the one call in this client that was written against Harbor's API
+// reference rather than against a running Harbor. If the deployment's version
+// does not serve it, this function is the only thing that has to change: the
+// fallback is DELETE + re-create the robot, at the cost of a window in which
+// the robot does not exist and pulls fail.
+func (c *httpClient) refreshRobotSecret(ctx context.Context, robotID int) (string, error) {
+	path := fmt.Sprintf("%s/%d", robotsPath, robotID)
+
+	resp, err := c.doJSON(ctx, http.MethodPatch, path, map[string]any{})
+	if err != nil {
+		return "", fmt.Errorf("refreshing Harbor robot secret: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", c.unexpectedStatus("refreshing Harbor robot secret", resp)
+	}
+
+	var result struct {
+		Secret string `json:"secret"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decoding Harbor robot secret response: %w", err)
+	}
+	if result.Secret == "" {
+		return "", fmt.Errorf("refreshing Harbor robot secret: Harbor returned an empty secret")
+	}
+	return result.Secret, nil
 }
 
 // projectExists checks whether a Harbor project with the given name exists.
@@ -356,41 +430,55 @@ func (c *httpClient) getProjectID(ctx context.Context, projectName string) (int,
 	return project.ProjectID, nil
 }
 
-// robotExists checks whether a Harbor robot account exists for the given project.
-func (c *httpClient) robotExists(ctx context.Context, projectName, robotName string) (bool, error) {
+// robotRef identifies a robot account Harbor already holds. The numeric ID is
+// what the per-robot endpoints are addressed by.
+type robotRef struct {
+	ID   int
+	Name string // full name, e.g. robot$myproject+myrobot
+}
+
+// findRobot returns the project's robot account, or nil when Harbor has none.
+//
+// /api/v2.0/robots lists robots cluster-wide and pages them, so the query is
+// narrowed to this project server-side: without that the robot could sit on a
+// later page and be reported missing. The exact-name comparison afterwards is
+// what actually decides — Level/ProjectID only bound what has to be paged
+// through.
+func (c *httpClient) findRobot(ctx context.Context, projectName, robotName string) (*robotRef, error) {
 	projectID, err := c.getProjectID(ctx, projectName)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
 	// Build query: Level=project,ProjectID={id},name=~{projectName}+{robotName}
 	q := fmt.Sprintf("Level=project,ProjectID=%d,name=~%s+%s", projectID, projectName, robotName)
-	path := "/api/v2.0/robots?q=" + url.QueryEscape(url.QueryEscape(q)) // double escape for query parameter
+	path := robotsPath + "?q=" + url.QueryEscape(url.QueryEscape(q)) // double escape for query parameter
 
 	resp, err := c.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return false, c.unexpectedStatus("listing Harbor robots", resp)
+		return nil, c.unexpectedStatus("listing Harbor robots", resp)
 	}
 
 	var robots []struct {
+		ID   int    `json:"id"`
 		Name string `json:"name"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&robots); err != nil {
-		return false, fmt.Errorf("decoding Harbor robots response: %w", err)
+		return nil, fmt.Errorf("decoding Harbor robots response: %w", err)
 	}
 
 	fullName := fmt.Sprintf("robot$%s+%s", projectName, robotName)
 	for _, r := range robots {
 		if r.Name == fullName {
-			return true, nil
+			return &robotRef{ID: r.ID, Name: r.Name}, nil
 		}
 	}
-	return false, nil
+	return nil, nil
 }
 
 // do executes an HTTP request against the Harbor API.

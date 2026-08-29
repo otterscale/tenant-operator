@@ -21,12 +21,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
 const (
 	projectsPath = "/api/v2.0/projects"
-	robotsPath   = "/api/v2.0/robots"
 	membersPath  = "/api/v2.0/projects/test-project/members"
 )
 
@@ -311,13 +311,26 @@ func TestReconcileProjectMembers_SkipsMissingUser(t *testing.T) {
 	}
 }
 
-// --- EnsureRobotAccount tests ---
+// --- EnsureRobot / RefreshRobotSecret tests ---
 
 // robotTestHandler returns a handler that serves project lookup and robot API requests.
 // robotResponse controls what the robot list endpoint returns.
 func robotTestHandler(t *testing.T, robotResponse []byte, postHandler http.HandlerFunc) http.HandlerFunc {
+	return robotTestHandlerWithPatch(t, robotResponse, postHandler, nil)
+}
+
+// robotTestHandlerWithPatch additionally serves the per-robot PATCH that
+// refreshes a secret.
+func robotTestHandlerWithPatch(
+	t *testing.T, robotResponse []byte, postHandler, patchHandler http.HandlerFunc,
+) http.HandlerFunc {
 	t.Helper()
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Robot secret refresh: PATCH /api/v2.0/robots/{id}
+		if r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, robotsPath+"/") && patchHandler != nil {
+			patchHandler(w, r)
+			return
+		}
 		// Project lookup: GET /api/v2.0/projects/test-ns
 		if r.Method == http.MethodGet && r.URL.Path == projectsPath+"/test-ns" {
 			w.Header().Set("Content-Type", "application/json")
@@ -341,7 +354,7 @@ func robotTestHandler(t *testing.T, robotResponse []byte, postHandler http.Handl
 	}
 }
 
-func TestEnsureRobotAccount_Created(t *testing.T) {
+func TestEnsureRobot_Created(t *testing.T) {
 	postHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -361,12 +374,12 @@ func TestEnsureRobotAccount_Created(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "admin", "password")
-	creds, created, err := c.EnsureRobotAccount(context.Background(), "test-ns", "workspace-test-ns")
+	creds, err := c.EnsureRobot(context.Background(), "test-ns", "workspace-test-ns")
 	if err != nil {
-		t.Fatalf("EnsureRobotAccount returned error: %v", err)
+		t.Fatalf("EnsureRobot returned error: %v", err)
 	}
-	if !created {
-		t.Error("expected created=true")
+	if creds == nil {
+		t.Fatal("expected credentials from a robot this call created")
 	}
 	if creds.Name != "robot$test-ns+workspace-test-ns" {
 		t.Errorf("expected Name=robot$test-ns+workspace-test-ns, got %s", creds.Name)
@@ -376,7 +389,7 @@ func TestEnsureRobotAccount_Created(t *testing.T) {
 	}
 }
 
-func TestEnsureRobotAccount_AlreadyExists(t *testing.T) {
+func TestEnsureRobot_AlreadyExists(t *testing.T) {
 	existingRobots, _ := json.Marshal([]map[string]any{
 		{"name": "robot$test-ns+workspace-test-ns", "id": 42},
 	})
@@ -384,19 +397,18 @@ func TestEnsureRobotAccount_AlreadyExists(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "admin", "password")
-	creds, created, err := c.EnsureRobotAccount(context.Background(), "test-ns", "workspace-test-ns")
+	creds, err := c.EnsureRobot(context.Background(), "test-ns", "workspace-test-ns")
 	if err != nil {
-		t.Fatalf("EnsureRobotAccount returned error: %v", err)
+		t.Fatalf("EnsureRobot returned error: %v", err)
 	}
-	if created {
-		t.Error("expected created=false for existing robot")
-	}
+	// Harbor reveals a robot secret only when it sets one, so an existing robot
+	// yields no credentials. That is the signal the caller refreshes on.
 	if creds != nil {
-		t.Error("expected nil credentials for existing robot")
+		t.Errorf("expected nil credentials for an existing robot, got %+v", creds)
 	}
 }
 
-func TestEnsureRobotAccount_ConflictIsIdempotent(t *testing.T) {
+func TestEnsureRobot_ConflictIsIdempotent(t *testing.T) {
 	postHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusConflict)
 		_, _ = w.Write([]byte(`{"errors":[{"code":"CONFLICT","message":"robot account already exists"}]}`))
@@ -405,19 +417,18 @@ func TestEnsureRobotAccount_ConflictIsIdempotent(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "admin", "password")
-	creds, created, err := c.EnsureRobotAccount(context.Background(), "test-ns", "workspace-test-ns")
+	creds, err := c.EnsureRobot(context.Background(), "test-ns", "workspace-test-ns")
 	if err != nil {
-		t.Fatalf("EnsureRobotAccount should treat 409 as success, got error: %v", err)
+		t.Fatalf("EnsureRobot should treat 409 as success, got error: %v", err)
 	}
-	if created {
-		t.Error("expected created=false for conflict")
-	}
+	// Someone created the robot between the check and the create, so its secret
+	// went to them — indistinguishable from finding it already there.
 	if creds != nil {
-		t.Error("expected nil credentials for conflict")
+		t.Errorf("expected nil credentials for conflict, got %+v", creds)
 	}
 }
 
-func TestEnsureRobotAccount_ServerError(t *testing.T) {
+func TestEnsureRobot_ServerError(t *testing.T) {
 	postHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte("internal error"))
@@ -426,9 +437,98 @@ func TestEnsureRobotAccount_ServerError(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "admin", "password")
-	_, _, err := c.EnsureRobotAccount(context.Background(), "test-ns", "workspace-test-ns")
+	_, err := c.EnsureRobot(context.Background(), "test-ns", "workspace-test-ns")
 	if err == nil {
-		t.Fatal("EnsureRobotAccount should return error on 500")
+		t.Fatal("EnsureRobot should return error on 500")
+	}
+}
+
+// existingRobotList is the robot Harbor reports for project test-ns. Its id is
+// what the per-robot endpoints are addressed by.
+func existingRobotList(t *testing.T) []byte {
+	t.Helper()
+	body, err := json.Marshal([]map[string]any{
+		{"id": 42, "name": "robot$test-ns+workspace-test-ns"},
+	})
+	if err != nil {
+		t.Fatalf("marshaling robot list: %v", err)
+	}
+	return body
+}
+
+func TestRefreshRobotSecret_ReturnsNewCredentials(t *testing.T) {
+	var patchedPath string
+	patchHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		patchedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"secret": "brand-new-secret"})
+	})
+	srv := httptest.NewServer(robotTestHandlerWithPatch(t, existingRobotList(t), nil, patchHandler))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "admin", "password")
+	creds, err := c.RefreshRobotSecret(context.Background(), "test-ns", "workspace-test-ns")
+	if err != nil {
+		t.Fatalf("RefreshRobotSecret returned error: %v", err)
+	}
+
+	// The robot is addressed by the id found in the list, not by its name.
+	if want := robotsPath + "/42"; patchedPath != want {
+		t.Errorf("patched %s, want %s", patchedPath, want)
+	}
+	if creds.Secret != "brand-new-secret" {
+		t.Errorf("Secret = %q, want brand-new-secret", creds.Secret)
+	}
+	// The refresh response carries only the secret, so the name has to come from
+	// the robot Harbor matched.
+	if creds.Name != "robot$test-ns+workspace-test-ns" {
+		t.Errorf("Name = %q, want robot$test-ns+workspace-test-ns", creds.Name)
+	}
+}
+
+func TestRefreshRobotSecret_MissingRobotIsAnError(t *testing.T) {
+	srv := httptest.NewServer(robotTestHandlerWithPatch(t, []byte("[]"), nil, nil))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "admin", "password")
+	_, err := c.RefreshRobotSecret(context.Background(), "test-ns", "workspace-test-ns")
+	if err == nil {
+		t.Fatal("refreshing a robot that does not exist should be an error")
+	}
+	if !strings.Contains(err.Error(), "does not exist") {
+		t.Errorf("error = %q, want it to say the robot does not exist", err)
+	}
+}
+
+// An empty secret would be written into the image pull Secret and fail every
+// pull with an authentication error far from here, so it is rejected at source.
+func TestRefreshRobotSecret_EmptySecretIsAnError(t *testing.T) {
+	patchHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"secret": ""})
+	})
+	srv := httptest.NewServer(robotTestHandlerWithPatch(t, existingRobotList(t), nil, patchHandler))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "admin", "password")
+	_, err := c.RefreshRobotSecret(context.Background(), "test-ns", "workspace-test-ns")
+	if err == nil {
+		t.Fatal("an empty secret should be an error")
+	}
+}
+
+func TestRefreshRobotSecret_ServerError(t *testing.T) {
+	patchHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("internal error"))
+	})
+	srv := httptest.NewServer(robotTestHandlerWithPatch(t, existingRobotList(t), nil, patchHandler))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "admin", "password")
+	_, err := c.RefreshRobotSecret(context.Background(), "test-ns", "workspace-test-ns")
+	if err == nil {
+		t.Fatal("RefreshRobotSecret should return error on 500")
 	}
 }
 
