@@ -35,10 +35,8 @@ import (
 // configured AllowedNamespaces; disabled, the NetworkPolicy is removed.
 func ReconcileNetworkIsolation(ctx context.Context, c client.Client, scheme *runtime.Scheme, w *tenantv1alpha1.Workspace, version string) error {
 	policy := &networkingv1.NetworkPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      NetworkPolicyName,
-			Namespace: w.Spec.Namespace,
-		},
+		Name:      NetworkPolicyName,
+		Namespace: w.Spec.Namespace,
 	}
 
 	if !w.Spec.NetworkIsolation.Enabled {

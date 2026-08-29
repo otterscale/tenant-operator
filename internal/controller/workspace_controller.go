@@ -32,7 +32,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -177,8 +176,7 @@ func (r *WorkspaceReconciler) reconcileResources(ctx context.Context, w *tenantv
 // Permanent errors (e.g. namespace conflict) do not requeue, unless the status
 // patch itself fails. Transient errors go back to controller-runtime for backoff.
 func (r *WorkspaceReconciler) handleReconcileError(ctx context.Context, w *tenantv1alpha1.Workspace, err error) (ctrl.Result, error) {
-	var nce *workspace.NamespaceConflictError
-	if errors.As(err, &nce) {
+	if _, ok := errors.AsType[*workspace.NamespaceConflictError](err); ok {
 		patchErr := r.setReadyConditionFalse(ctx, w, "NamespaceConflict", err.Error())
 		r.eventf(w, corev1.EventTypeWarning, "NamespaceConflict", err.Error())
 		if patchErr != nil {
@@ -419,9 +417,7 @@ func (r *WorkspaceReconciler) allWorkspaceRequests(ctx context.Context) []reconc
 	requests := make([]reconcile.Request, 0, len(wsList.Items))
 	for _, ws := range wsList.Items {
 		requests = append(requests, reconcile.Request{
-			NamespacedName: types.NamespacedName{
-				Name: ws.Name,
-			},
+			Name: ws.Name,
 		})
 	}
 	return requests

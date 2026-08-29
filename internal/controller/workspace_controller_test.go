@@ -69,7 +69,7 @@ var _ = Describe("Workspace Controller", func() {
 
 	makeWorkspace := func(name, namespace string, mods ...func(*tenantv1alpha1.Workspace)) *tenantv1alpha1.Workspace {
 		w := &tenantv1alpha1.Workspace{
-			ObjectMeta: metav1.ObjectMeta{Name: name},
+			Name: name,
 			Spec: tenantv1alpha1.WorkspaceSpec{
 				Namespace: namespace,
 				Members: []tenantv1alpha1.WorkspaceMember{
@@ -263,8 +263,8 @@ var _ = Describe("Workspace Controller", func() {
 			fullyReconcile()
 
 			stale := &corev1.ConfigMap{
-				ObjectMeta: metav1.ObjectMeta{Name: ws.ConfigName, Namespace: namespaceName},
-				Data:       map[string]string{"ServiceEndpoint": "http://10.0.0.1"},
+				Name: ws.ConfigName, Namespace: namespaceName,
+				Data: map[string]string{"ServiceEndpoint": "http://10.0.0.1"},
 			}
 			Expect(k8sClient.Create(ctx, stale)).To(Succeed())
 
@@ -278,17 +278,15 @@ var _ = Describe("Workspace Controller", func() {
 
 		It("should enqueue every workspace when an endpoint source Gateway changes", func() {
 			Expect(reconciler.enqueueAllWorkspacesIf(ws.IsEndpointSourceGateway)(ctx, &gatewayv1.Gateway{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      ws.PlatformGatewayName,
-					Namespace: ws.PlatformGatewayNamespace,
-				},
+				Name:      ws.PlatformGatewayName,
+				Namespace: ws.PlatformGatewayNamespace,
 			})).To(ContainElement(
-				reconcile.Request{NamespacedName: types.NamespacedName{Name: resourceName}},
+				reconcile.Request{Name: resourceName},
 			))
 
 			By("Ignoring Gateways the endpoints are not derived from")
 			Expect(reconciler.enqueueAllWorkspacesIf(ws.IsEndpointSourceGateway)(ctx, &gatewayv1.Gateway{
-				ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: ws.PlatformGatewayNamespace},
+				Name: "unrelated", Namespace: ws.PlatformGatewayNamespace,
 			})).To(BeEmpty())
 		})
 	})
@@ -342,15 +340,13 @@ var _ = Describe("Workspace Controller", func() {
 		// tenant-operator-config ConfigMap, not a Workspace spec field.
 		BeforeEach(func() {
 			Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{Name: ws.OperatorNamespace},
+				Name: ws.OperatorNamespace,
 			}))).To(Succeed())
 
 			globalConfig := &corev1.ConfigMap{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      ws.OperatorConfigName,
-					Namespace: ws.OperatorNamespace,
-				},
-				Data: map[string]string{ws.RancherProjectIDKey: rancherProjectID},
+				Name:      ws.OperatorConfigName,
+				Namespace: ws.OperatorNamespace,
+				Data:      map[string]string{ws.RancherProjectIDKey: rancherProjectID},
 			}
 			if err := k8sClient.Create(ctx, globalConfig); errors.IsAlreadyExists(err) {
 				fetchResource(globalConfig, ws.OperatorConfigName, ws.OperatorNamespace)
@@ -384,12 +380,12 @@ var _ = Describe("Workspace Controller", func() {
 			fetchResource(globalConfig, ws.OperatorConfigName, ws.OperatorNamespace)
 
 			Expect(reconciler.enqueueAllWorkspacesIf(ws.IsOperatorConfig)(ctx, globalConfig)).To(ContainElement(
-				reconcile.Request{NamespacedName: types.NamespacedName{Name: resourceName}},
+				reconcile.Request{Name: resourceName},
 			))
 
 			By("Ignoring ConfigMaps that are not the global config")
 			Expect(reconciler.enqueueAllWorkspacesIf(ws.IsOperatorConfig)(ctx, &corev1.ConfigMap{
-				ObjectMeta: metav1.ObjectMeta{Name: ws.ConfigName, Namespace: namespaceName},
+				Name: ws.ConfigName, Namespace: namespaceName,
 			})).To(BeEmpty())
 		})
 	})
@@ -398,7 +394,7 @@ var _ = Describe("Workspace Controller", func() {
 		It("should set Ready=False with NamespaceConflict when namespace already exists", func() {
 			By("Creating an existing namespace not owned by the workspace")
 			Expect(k8sClient.Create(ctx, &corev1.Namespace{
-				ObjectMeta: metav1.ObjectMeta{Name: namespaceName},
+				Name: namespaceName,
 			})).To(Succeed())
 
 			By("Reconciling - a namespace conflict is permanent, so no error and no requeue")

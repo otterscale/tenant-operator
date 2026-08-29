@@ -25,7 +25,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -133,10 +132,8 @@ func ReconcileConfig(ctx context.Context, c client.Client, scheme *runtime.Schem
 
 func workspaceConfigMap(w *tenantv1alpha1.Workspace) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      ConfigName,
-			Namespace: w.Spec.Namespace,
-		},
+		Name:      ConfigName,
+		Namespace: w.Spec.Namespace,
 	}
 }
 

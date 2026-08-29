@@ -21,7 +21,6 @@ import (
 	"fmt"
 
 	rbacv1 "k8s.io/api/rbac/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -50,10 +49,8 @@ func ReconcileRoleBindings(ctx context.Context, c client.Client, scheme *runtime
 // the role has none.
 func reconcileRoleBinding(ctx context.Context, c client.Client, scheme *runtime.Scheme, w *tenantv1alpha1.Workspace, version string, role tenantv1alpha1.MemberRole, members []tenantv1alpha1.WorkspaceMember) error {
 	binding := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      RoleBindingName + "-" + string(role),
-			Namespace: w.Spec.Namespace,
-		},
+		Name:      RoleBindingName + "-" + string(role),
+		Namespace: w.Spec.Namespace,
 	}
 
 	if len(members) == 0 {

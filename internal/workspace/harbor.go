@@ -25,7 +25,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -233,10 +232,8 @@ func reconcileImagePullSecret(
 	}
 
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      ImagePullSecretName,
-			Namespace: w.Spec.Namespace,
-		},
+		Name:      ImagePullSecretName,
+		Namespace: w.Spec.Namespace,
 	}
 
 	op, err := ctrlutil.CreateOrUpdate(ctx, c, secret, func() error {
@@ -270,10 +267,8 @@ const defaultServiceAccountName = "default"
 // namespace, not to us.
 func ensureImagePullSecret(ctx context.Context, c client.Client, namespace string) error {
 	sa := &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      defaultServiceAccountName,
-			Namespace: namespace,
-		},
+		Name:      defaultServiceAccountName,
+		Namespace: namespace,
 	}
 
 	op, err := ctrlutil.CreateOrUpdate(ctx, c, sa, func() error {

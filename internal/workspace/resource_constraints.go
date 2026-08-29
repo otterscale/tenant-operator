@@ -21,7 +21,6 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -33,10 +32,8 @@ import (
 // ReconcileResourceQuota applies the quota if defined, or deletes it if removed.
 func ReconcileResourceQuota(ctx context.Context, c client.Client, scheme *runtime.Scheme, w *tenantv1alpha1.Workspace, version string) error {
 	quota := &corev1.ResourceQuota{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      ResourceQuotaName,
-			Namespace: w.Spec.Namespace,
-		},
+		Name:      ResourceQuotaName,
+		Namespace: w.Spec.Namespace,
 	}
 
 	if w.Spec.ResourceQuota == nil {
@@ -63,10 +60,8 @@ func ReconcileResourceQuota(ctx context.Context, c client.Client, scheme *runtim
 // ReconcileLimitRange applies the limits if defined, or deletes them if removed.
 func ReconcileLimitRange(ctx context.Context, c client.Client, scheme *runtime.Scheme, w *tenantv1alpha1.Workspace, version string) error {
 	limits := &corev1.LimitRange{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      LimitRangeName,
-			Namespace: w.Spec.Namespace,
-		},
+		Name:      LimitRangeName,
+		Namespace: w.Spec.Namespace,
 	}
 
 	if w.Spec.LimitRange == nil {

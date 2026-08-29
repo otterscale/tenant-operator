@@ -63,10 +63,8 @@ func ReconcileHelmRepository(ctx context.Context, c client.Client, scheme *runti
 		}
 
 		repo := &sourcev1.HelmRepository{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      source.name,
-				Namespace: w.Spec.Namespace,
-			},
+			Name:      source.name,
+			Namespace: w.Spec.Namespace,
 		}
 
 		op, err := ctrlutil.CreateOrUpdate(ctx, c, repo, func() error {

@@ -23,7 +23,6 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/client-go/rest"
@@ -77,7 +76,7 @@ var _ = Describe("Workspace Controller - CEL Validation", func() {
 		It("should allow creation when creator is listed as admin", func() {
 			userClient := createImpersonatedClient("alice", nil)
 			workspace = &tenantv1alpha1.Workspace{
-				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Name: resourceName,
 				Spec: tenantv1alpha1.WorkspaceSpec{
 					Namespace: string(uuid.NewUUID()),
 					Members: []tenantv1alpha1.WorkspaceMember{
@@ -91,7 +90,7 @@ var _ = Describe("Workspace Controller - CEL Validation", func() {
 		It("should deny creation when creator is not listed as admin", func() {
 			userClient := createImpersonatedClient("mallory", nil)
 			workspace = &tenantv1alpha1.Workspace{
-				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Name: resourceName,
 				Spec: tenantv1alpha1.WorkspaceSpec{
 					Namespace: string(uuid.NewUUID()),
 					Members: []tenantv1alpha1.WorkspaceMember{
@@ -107,7 +106,7 @@ var _ = Describe("Workspace Controller - CEL Validation", func() {
 		It("should deny creation when creator is listed as edit only", func() {
 			userClient := createImpersonatedClient("bob", nil)
 			workspace = &tenantv1alpha1.Workspace{
-				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Name: resourceName,
 				Spec: tenantv1alpha1.WorkspaceSpec{
 					Namespace: string(uuid.NewUUID()),
 					Members: []tenantv1alpha1.WorkspaceMember{
@@ -124,7 +123,7 @@ var _ = Describe("Workspace Controller - CEL Validation", func() {
 		It("should allow system:masters to create workspace for others", func() {
 			masterClient := createImpersonatedClient("cluster-admin", []string{"system:masters"})
 			workspace = &tenantv1alpha1.Workspace{
-				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Name: resourceName,
 				Spec: tenantv1alpha1.WorkspaceSpec{
 					Namespace: string(uuid.NewUUID()),
 					Members: []tenantv1alpha1.WorkspaceMember{
@@ -137,7 +136,7 @@ var _ = Describe("Workspace Controller - CEL Validation", func() {
 
 		It("should allow user bound to cluster-admin ClusterRole to create workspace for others", func() {
 			binding := &rbacv1.ClusterRoleBinding{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-cluster-admin-create-" + resourceName},
+				Name: "test-cluster-admin-create-" + resourceName,
 				RoleRef: rbacv1.RoleRef{
 					APIGroup: rbacv1.GroupName,
 					Kind:     "ClusterRole",
@@ -152,7 +151,7 @@ var _ = Describe("Workspace Controller - CEL Validation", func() {
 
 			caClient := createImpersonatedClient("cluster-admin-user", nil)
 			workspace = &tenantv1alpha1.Workspace{
-				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Name: resourceName,
 				Spec: tenantv1alpha1.WorkspaceSpec{
 					Namespace: string(uuid.NewUUID()),
 					Members: []tenantv1alpha1.WorkspaceMember{
@@ -167,7 +166,7 @@ var _ = Describe("Workspace Controller - CEL Validation", func() {
 			sharedNS := string(uuid.NewUUID())
 
 			firstWS := &tenantv1alpha1.Workspace{
-				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Name: resourceName,
 				Spec: tenantv1alpha1.WorkspaceSpec{
 					Namespace: sharedNS,
 					Members: []tenantv1alpha1.WorkspaceMember{
@@ -181,7 +180,7 @@ var _ = Describe("Workspace Controller - CEL Validation", func() {
 
 			secondName := string(uuid.NewUUID())
 			secondWS := &tenantv1alpha1.Workspace{
-				ObjectMeta: metav1.ObjectMeta{Name: secondName},
+				Name: secondName,
 				Spec: tenantv1alpha1.WorkspaceSpec{
 					Namespace: sharedNS,
 					Members: []tenantv1alpha1.WorkspaceMember{
@@ -199,7 +198,7 @@ var _ = Describe("Workspace Controller - CEL Validation", func() {
 	Context("Admission Policy - Update/Delete Authorization", func() {
 		BeforeEach(func() {
 			workspace = &tenantv1alpha1.Workspace{
-				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Name: resourceName,
 				Spec: tenantv1alpha1.WorkspaceSpec{
 					Namespace: string(uuid.NewUUID()),
 					Members: []tenantv1alpha1.WorkspaceMember{
@@ -247,7 +246,7 @@ var _ = Describe("Workspace Controller - CEL Validation", func() {
 
 		It("should allow user bound to cluster-admin ClusterRole to update workspace", func() {
 			binding := &rbacv1.ClusterRoleBinding{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-cluster-admin-" + resourceName},
+				Name: "test-cluster-admin-" + resourceName,
 				RoleRef: rbacv1.RoleRef{
 					APIGroup: rbacv1.GroupName,
 					Kind:     "ClusterRole",
@@ -311,7 +310,7 @@ var _ = Describe("Workspace Controller - CEL Validation", func() {
 	Context("CRD CEL Validations", func() {
 		It("should reject a Workspace with no admin member", func() {
 			workspace = &tenantv1alpha1.Workspace{
-				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Name: resourceName,
 				Spec: tenantv1alpha1.WorkspaceSpec{
 					Namespace: string(uuid.NewUUID()),
 					Members: []tenantv1alpha1.WorkspaceMember{
@@ -326,7 +325,7 @@ var _ = Describe("Workspace Controller - CEL Validation", func() {
 
 		It("should reject a reserved namespace", func() {
 			workspace = &tenantv1alpha1.Workspace{
-				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Name: resourceName,
 				Spec: tenantv1alpha1.WorkspaceSpec{
 					Namespace: "kube-system",
 					Members: []tenantv1alpha1.WorkspaceMember{
@@ -341,7 +340,7 @@ var _ = Describe("Workspace Controller - CEL Validation", func() {
 
 		It("should reject invalid allowedNamespaces entries", func() {
 			workspace = &tenantv1alpha1.Workspace{
-				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Name: resourceName,
 				Spec: tenantv1alpha1.WorkspaceSpec{
 					Namespace: string(uuid.NewUUID()),
 					Members: []tenantv1alpha1.WorkspaceMember{
