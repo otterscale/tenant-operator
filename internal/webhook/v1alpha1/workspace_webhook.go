@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	utilrand "k8s.io/apimachinery/pkg/util/rand"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -34,11 +36,20 @@ import (
 )
 
 // SetupWorkspaceWebhookWithManager registers the webhook for Workspace in the manager.
+//
+// Both hooks read through mgr.GetAPIReader() rather than the manager's cached
+// client. Admission decides whether a name may be claimed at all, so a cache
+// lagging the API server by even a moment would admit the very conflicts these
+// checks exist to prevent. Workspaces are created by hand and are few, so the
+// extra round trip costs nothing that matters.
 func SetupWorkspaceWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr, &tenantv1alpha1.Workspace{}).
-		WithDefaulter(&WorkspaceCustomDefaulter{}).
+		WithDefaulter(&WorkspaceCustomDefaulter{
+			Reader: mgr.GetAPIReader(),
+		}).
 		WithValidator(&WorkspaceCustomValidator{
-			Reader: mgr.GetClient(),
+			Reader: mgr.GetAPIReader(),
+			Client: mgr.GetClient(),
 		}).
 		Complete()
 }
@@ -51,7 +62,11 @@ func SetupWorkspaceWebhookWithManager(mgr ctrl.Manager) error {
 //
 // NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
 // as it is used only for temporary operations and does not need to be deeply copied.
-type WorkspaceCustomDefaulter struct{}
+type WorkspaceCustomDefaulter struct {
+	// Reader looks up existing Namespaces so a generated name is not handed out
+	// on top of one. Must be uncached — see SetupWorkspaceWebhookWithManager.
+	Reader client.Reader
+}
 
 // Default implements admission.Defaulter[*tenantv1alpha1.Workspace] so a webhook will be registered for the Kind Workspace.
 // It ensures that labels with the prefix "user.otterscale.io/" mirror the current member subjects,
@@ -60,11 +75,40 @@ func (d *WorkspaceCustomDefaulter) Default(ctx context.Context, ws *tenantv1alph
 	log.FromContext(ctx).Info("Defaulting for Workspace", "name", ws.GetName())
 
 	if ws.Spec.Namespace == "" {
-		ws.Spec.Namespace = generateNamespaceName()
+		name, err := d.generateAvailableNamespaceName(ctx)
+		if err != nil {
+			return err
+		}
+		ws.Spec.Namespace = name
 	}
 
 	defaultMemberLabels(ws)
 	return nil
+}
+
+// namespaceNameAttempts bounds the search for a free generated name. The name
+// space is large enough that the first candidate almost always wins; the retry
+// only has to beat the alternative, which is a Workspace permanently stuck on a
+// namespace it may not adopt and may not rename.
+const namespaceNameAttempts = 5
+
+// generateAvailableNamespaceName returns a generated name no Namespace holds yet.
+//
+// Handing out a name blind is not merely optimistic: a collision produces a
+// Workspace that can never reconcile and can never be fixed, because
+// spec.namespace is immutable once admitted. See workspace.ValidateNamespaceAvailable.
+func (d *WorkspaceCustomDefaulter) generateAvailableNamespaceName(ctx context.Context) (string, error) {
+	for range namespaceNameAttempts {
+		name := generateNamespaceName()
+		err := d.Reader.Get(ctx, client.ObjectKey{Name: name}, &corev1.Namespace{})
+		if apierrors.IsNotFound(err) {
+			return name, nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("checking generated namespace name %q: %w", name, err)
+		}
+	}
+	return "", fmt.Errorf("could not generate an unused namespace name in %d attempts", namespaceNameAttempts)
 }
 
 // generateNamespaceName produces a 6-character namespace name:
@@ -119,8 +163,14 @@ func defaultMemberLabels(ws *tenantv1alpha1.Workspace) {
 // The authorization logic itself is kept in internal/workspace/ for
 // testability; this validator is intentionally thin.
 type WorkspaceCustomValidator struct {
-	// Reader is used to look up ClusterRoleBindings and existing Workspaces.
+	// Reader looks up existing Workspaces and Namespaces to check that the
+	// target namespace can still be claimed. Must be uncached — see
+	// SetupWorkspaceWebhookWithManager.
 	Reader client.Reader
+
+	// Client submits the SubjectAccessReview backing the cluster-wide access
+	// check. Writes never go through the cache, so the manager's client is fine.
+	Client client.Client
 }
 
 // ValidateCreate ensures the requesting user is listed as an admin member
@@ -138,11 +188,17 @@ func (v *WorkspaceCustomValidator) ValidateCreate(ctx context.Context, ws *tenan
 		return nil, err
 	}
 
+	// Uniqueness first: when another Workspace already claims the namespace, its
+	// name is the more useful thing to put in front of the caller.
 	if err := workspace.ValidateNamespaceUniqueness(ctx, v.Reader, ws); err != nil {
 		return nil, err
 	}
 
-	return nil, workspace.AuthorizeCreation(ctx, v.Reader, req.UserInfo, ws)
+	if err := workspace.ValidateNamespaceAvailable(ctx, v.Reader, ws); err != nil {
+		return nil, err
+	}
+
+	return nil, workspace.AuthorizeCreation(ctx, v.Client, req.UserInfo, ws)
 }
 
 // ValidateUpdate ensures only workspace admins (or privileged identities) can
@@ -156,7 +212,7 @@ func (v *WorkspaceCustomValidator) ValidateUpdate(ctx context.Context, oldWorksp
 		return nil, fmt.Errorf("unable to retrieve admission request from context: %w", err)
 	}
 
-	return nil, workspace.AuthorizeModification(ctx, v.Reader, req.UserInfo, oldWorkspace)
+	return nil, workspace.AuthorizeModification(ctx, v.Client, req.UserInfo, oldWorkspace)
 }
 
 // ValidateDelete ensures only workspace admins (or privileged identities) can
@@ -169,5 +225,5 @@ func (v *WorkspaceCustomValidator) ValidateDelete(ctx context.Context, ws *tenan
 		return nil, fmt.Errorf("unable to retrieve admission request from context: %w", err)
 	}
 
-	return nil, workspace.AuthorizeModification(ctx, v.Reader, req.UserInfo, ws)
+	return nil, workspace.AuthorizeModification(ctx, v.Client, req.UserInfo, ws)
 }

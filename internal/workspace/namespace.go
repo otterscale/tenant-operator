@@ -22,8 +22,10 @@ import (
 	"maps"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -61,6 +63,31 @@ type NamespaceConflictError struct {
 
 func (e *NamespaceConflictError) Error() string {
 	return fmt.Sprintf("namespace %s exists but is not owned by this workspace", e.Name)
+}
+
+// ValidateNamespaceAvailable reports whether the workspace's target namespace is
+// still free to create.
+//
+// This is the admission-time counterpart of NamespaceConflictError, and exists
+// because that error is unrecoverable: reconcile refuses to adopt a namespace it
+// does not own, spec.namespace is immutable, and the conflict does not requeue —
+// so a Workspace admitted onto an occupied namespace can never become Ready and
+// cannot be repaired, only deleted and recreated. Admission is the last point at
+// which the caller can still be told to pick another name.
+//
+// Only meaningful on create. Afterwards the namespace exists precisely because
+// reconcile created it.
+func ValidateNamespaceAvailable(ctx context.Context, reader client.Reader, ws *tenantv1alpha1.Workspace) error {
+	err := reader.Get(ctx, types.NamespacedName{Name: ws.Spec.Namespace}, &corev1.Namespace{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("checking whether namespace %q is available: %w", ws.Spec.Namespace, err)
+	}
+	return fmt.Errorf(
+		"namespace %q already exists: a workspace creates its own namespace, so choose a different spec.namespace or leave it empty to have one generated",
+		ws.Spec.Namespace)
 }
 
 // ReconcileNamespace ensures the Namespace exists and is properly labeled.
