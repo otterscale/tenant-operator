@@ -126,7 +126,7 @@ func ReconcileConfig(ctx context.Context, c client.Client, scheme *runtime.Schem
 		return ctrlutil.SetControllerReference(w, cm, scheme)
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("reconciling ConfigMap: %w", err)
 	}
 	if op != ctrlutil.OperationResultNone {
 		logger.Info("ConfigMap reconciled", "operation", op, "name", cm.Name)
@@ -146,7 +146,10 @@ func workspaceConfigMap(w *tenantv1alpha1.Workspace) *corev1.ConfigMap {
 // deleteConfig removes the workspace-config ConfigMap. A ConfigMap that was
 // never created is not an error.
 func deleteConfig(ctx context.Context, c client.Client, w *tenantv1alpha1.Workspace) error {
-	return client.IgnoreNotFound(c.Delete(ctx, workspaceConfigMap(w)))
+	if err := client.IgnoreNotFound(c.Delete(ctx, workspaceConfigMap(w))); err != nil {
+		return fmt.Errorf("deleting ConfigMap: %w", err)
+	}
+	return nil
 }
 
 // operatorConfigData returns the data of the operator-wide tenant-operator-config
@@ -159,7 +162,7 @@ func operatorConfigData(ctx context.Context, c client.Client) (map[string]string
 		if apierrors.IsNotFound(err) {
 			return nil, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("reading operator ConfigMap %s: %w", key, err)
 	}
 	return cm.Data, nil
 }
@@ -198,7 +201,7 @@ func resolveExternalAddress(ctx context.Context, c client.Client) (string, error
 	var gateway gatewayv1.Gateway
 	key := types.NamespacedName{Name: PlatformGatewayName, Namespace: PlatformGatewayNamespace}
 	if err := c.Get(ctx, key, &gateway); err != nil {
-		return "", err
+		return "", fmt.Errorf("reading platform Gateway %s: %w", key, err)
 	}
 
 	addresses := make([]string, 0, len(gateway.Spec.Addresses))
@@ -235,7 +238,7 @@ func resolveModelGatewayEndpoint(ctx context.Context, c client.Client, externalA
 	var gateway gatewayv1.Gateway
 	key := types.NamespacedName{Name: ModelGatewayName, Namespace: ModelGatewayNamespace}
 	if err := c.Get(ctx, key, &gateway); err != nil {
-		return "", err
+		return "", fmt.Errorf("reading model Gateway %s: %w", key, err)
 	}
 
 	for _, preferred := range modelGatewayProtocols {

@@ -565,7 +565,7 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 		patch := client.MergeFrom(w.DeepCopy())
 		w.Status = *newStatus
 		if err := r.Status().Patch(ctx, w, patch); err != nil {
-			return err
+			return fmt.Errorf("patching Workspace status: %w", err)
 		}
 		log.FromContext(ctx).Info("Workspace status updated")
 		r.Recorder.Eventf(w, nil, corev1.EventTypeNormal, "Reconciled", "Reconcile",

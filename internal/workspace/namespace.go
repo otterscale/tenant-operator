@@ -128,7 +128,10 @@ func ReconcileNamespace(ctx context.Context, c client.Client, scheme *runtime.Sc
 		return ctrlutil.SetControllerReference(w, namespace, scheme)
 	})
 	if err != nil {
-		return err
+		// %w, not %v: the mutate function above returns NamespaceConflictError
+		// through here, and the controller classifies it as permanent with
+		// errors.As. Flattening it would silently turn that into a retry loop.
+		return fmt.Errorf("reconciling Namespace %q: %w", namespace.Name, err)
 	}
 	if op != ctrlutil.OperationResultNone {
 		log.FromContext(ctx).Info("Namespace reconciled", "operation", op, "name", namespace.Name)

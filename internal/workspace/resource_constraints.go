@@ -18,6 +18,7 @@ package workspace
 
 import (
 	"context"
+	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -39,7 +40,10 @@ func ReconcileResourceQuota(ctx context.Context, c client.Client, scheme *runtim
 	}
 
 	if w.Spec.ResourceQuota == nil {
-		return client.IgnoreNotFound(c.Delete(ctx, quota))
+		if err := client.IgnoreNotFound(c.Delete(ctx, quota)); err != nil {
+			return fmt.Errorf("deleting ResourceQuota: %w", err)
+		}
+		return nil
 	}
 
 	op, err := ctrlutil.CreateOrUpdate(ctx, c, quota, func() error {
@@ -48,7 +52,7 @@ func ReconcileResourceQuota(ctx context.Context, c client.Client, scheme *runtim
 		return ctrlutil.SetControllerReference(w, quota, scheme)
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("reconciling ResourceQuota: %w", err)
 	}
 	if op != ctrlutil.OperationResultNone {
 		log.FromContext(ctx).Info("ResourceQuota reconciled", "operation", op, "name", quota.Name)
@@ -66,7 +70,10 @@ func ReconcileLimitRange(ctx context.Context, c client.Client, scheme *runtime.S
 	}
 
 	if w.Spec.LimitRange == nil {
-		return client.IgnoreNotFound(c.Delete(ctx, limits))
+		if err := client.IgnoreNotFound(c.Delete(ctx, limits)); err != nil {
+			return fmt.Errorf("deleting LimitRange: %w", err)
+		}
+		return nil
 	}
 
 	op, err := ctrlutil.CreateOrUpdate(ctx, c, limits, func() error {
@@ -75,7 +82,7 @@ func ReconcileLimitRange(ctx context.Context, c client.Client, scheme *runtime.S
 		return ctrlutil.SetControllerReference(w, limits, scheme)
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("reconciling LimitRange: %w", err)
 	}
 	if op != ctrlutil.OperationResultNone {
 		log.FromContext(ctx).Info("LimitRange reconciled", "operation", op, "name", limits.Name)

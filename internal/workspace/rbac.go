@@ -18,6 +18,7 @@ package workspace
 
 import (
 	"context"
+	"fmt"
 
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -57,7 +58,10 @@ func reconcileRoleBinding(ctx context.Context, c client.Client, scheme *runtime.
 
 	// Clean up if no members have this role
 	if len(members) == 0 {
-		return client.IgnoreNotFound(c.Delete(ctx, binding))
+		if err := client.IgnoreNotFound(c.Delete(ctx, binding)); err != nil {
+			return fmt.Errorf("deleting RoleBinding for role %q: %w", role, err)
+		}
+		return nil
 	}
 
 	op, err := ctrlutil.CreateOrUpdate(ctx, c, binding, func() error {
@@ -78,7 +82,7 @@ func reconcileRoleBinding(ctx context.Context, c client.Client, scheme *runtime.
 		return ctrlutil.SetControllerReference(w, binding, scheme)
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("reconciling RoleBinding for role %q: %w", role, err)
 	}
 	if op != ctrlutil.OperationResultNone {
 		log.FromContext(ctx).Info("RoleBinding reconciled", "operation", op, "name", binding.Name)

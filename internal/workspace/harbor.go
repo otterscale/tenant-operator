@@ -209,7 +209,7 @@ func ReconcileHarbor(
 
 	// 4. Patch default ServiceAccount to include imagePullSecrets
 	if err := ensureImagePullSecret(ctx, c, w.Spec.Namespace); err != nil {
-		return nil, fmt.Errorf("patching default ServiceAccount: %w", err)
+		return nil, err
 	}
 
 	return missingMembers, nil
@@ -248,7 +248,7 @@ func ensureImagePullSecret(ctx context.Context, c client.Client, namespace strin
 		return nil
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("reconciling default ServiceAccount: %w", err)
 	}
 	if op != ctrlutil.OperationResultNone {
 		log.FromContext(ctx).Info("Default ServiceAccount reconciled with imagePullSecrets",
