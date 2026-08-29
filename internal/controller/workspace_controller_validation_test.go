@@ -279,7 +279,7 @@ var _ = Describe("Workspace Controller - CEL Validation", func() {
 
 			Expect(adminClient.Delete(ctx, &w)).To(Succeed())
 
-			// Prevent AfterEach from trying to delete again
+			// Already gone; keep AfterEach from deleting it again.
 			workspace = nil
 		})
 

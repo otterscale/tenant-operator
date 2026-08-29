@@ -52,9 +52,6 @@ import (
 	// +kubebuilder:scaffold:imports
 )
 
-// These tests use Ginkgo (BDD-style Go testing framework). Refer to
-// http://onsi.github.io/ginkgo/ to learn more about Ginkgo.
-
 var (
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -104,12 +101,11 @@ var _ = BeforeSuite(func() {
 		},
 	}
 
-	// Retrieve the first found binary directory to allow running tests from IDEs
+	// Lets the tests run straight from an IDE, without the Makefile targets.
 	if getFirstFoundEnvTestBinaryDir() != "" {
 		testEnv.BinaryAssetsDirectory = getFirstFoundEnvTestBinaryDir()
 	}
 
-	// cfg is defined in this file globally.
 	cfg, err = testEnv.Start()
 	Expect(err).NotTo(HaveOccurred())
 	Expect(cfg).NotTo(BeNil())
@@ -118,8 +114,7 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 	Expect(k8sClient).NotTo(BeNil())
 
-	// Start webhook server via controller-runtime Manager so that
-	// validating/mutating admission tests can exercise the full chain.
+	// Served through a real Manager, so admission tests exercise the full chain.
 	webhookInstallOptions := &testEnv.WebhookInstallOptions
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme: scheme.Scheme,
@@ -142,7 +137,6 @@ var _ = BeforeSuite(func() {
 		Expect(err).NotTo(HaveOccurred())
 	}()
 
-	// Wait for the webhook server to be ready.
 	dialer := &net.Dialer{Timeout: time.Second}
 	addrPort := fmt.Sprintf("%s:%d", webhookInstallOptions.LocalServingHost, webhookInstallOptions.LocalServingPort)
 	Eventually(func() error {
@@ -156,9 +150,9 @@ var _ = BeforeSuite(func() {
 	applyManifest(filepath.Join("..", "..", "config", "rbac", "workspace_editor_role.yaml"))
 	applyManifest(filepath.Join("..", "..", "config", "rbac", "workspace_binding.yaml"))
 
-	// The Harbor credentials Secret is a deployment prerequisite: without it
-	// reconcile fails before it reaches any other resource. Specs pair this with
-	// a fake harbor.Client, so the values themselves are never dialled.
+	// The Harbor credentials Secret is a prerequisite: without it reconcile fails
+	// before reaching any other resource. Specs pair this with a fake
+	// harbor.Client, so the values are never dialled.
 	Expect(client.IgnoreAlreadyExists(k8sClient.Create(ctx, &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{Name: ws.OperatorNamespace},
 	}))).To(Succeed())
@@ -183,14 +177,9 @@ var _ = AfterSuite(func() {
 	}, time.Minute, time.Second).Should(Succeed())
 })
 
-// getFirstFoundEnvTestBinaryDir locates the first binary in the specified path.
-// ENVTEST-based tests depend on specific binaries, usually located in paths set by
-// controller-runtime. When running tests directly (e.g., via an IDE) without using
-// Makefile targets, the 'BinaryAssetsDirectory' must be explicitly configured.
-//
-// This function streamlines the process by finding the required binaries, similar to
-// setting the 'KUBEBUILDER_ASSETS' environment variable. To ensure the binaries are
-// properly set up, run 'make setup-envtest' beforehand.
+// getFirstFoundEnvTestBinaryDir finds the envtest binaries under bin/k8s, so
+// tests run from an IDE without KUBEBUILDER_ASSETS set. Run 'make setup-envtest'
+// beforehand to put them there.
 func getFirstFoundEnvTestBinaryDir() string {
 	basePath := filepath.Join("..", "..", "bin", "k8s")
 	entries, err := os.ReadDir(basePath)

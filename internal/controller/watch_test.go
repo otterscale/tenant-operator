@@ -207,8 +207,8 @@ func TestOperatorSecretChangedPredicate(t *testing.T) {
 		}
 	})
 
-	// Distinct []byte values that compare equal must not fan out; a plain map
-	// comparison on []byte values would report every update as a change.
+	// A plain map comparison on []byte values would report every update as a
+	// change, fanning out on metadata churn.
 	t.Run("update with equal data in distinct byte slices", func(t *testing.T) {
 		old := operatorSecret()
 		updated := operatorSecret()

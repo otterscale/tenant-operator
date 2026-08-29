@@ -22,8 +22,10 @@ import (
 	"maps"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -34,10 +36,9 @@ import (
 const (
 	rancherProjectIDAnnotation = "field.cattle.io/projectId"
 
-	// RancherProjectIDKey is the tenant-operator-config key carrying the
-	// Rancher Project ID, in "<cluster-id>:<project-id>" form. It is operator-wide
-	// configuration rather than a Workspace spec field, so every workspace
-	// namespace this operator manages joins the same Rancher Project.
+	// RancherProjectIDKey is the tenant-operator-config key carrying the Rancher
+	// Project ID, as "<cluster-id>:<project-id>". Being operator-wide rather than
+	// a spec field, every managed namespace joins the same Rancher Project.
 	RancherProjectIDKey = "RancherProjectID"
 )
 
@@ -63,6 +64,29 @@ func (e *NamespaceConflictError) Error() string {
 	return fmt.Sprintf("namespace %s exists but is not owned by this workspace", e.Name)
 }
 
+// ValidateNamespaceAvailable reports whether the workspace's target namespace is
+// still free to create.
+//
+// This is the admission-time counterpart of NamespaceConflictError, which is
+// unrecoverable: reconcile will not adopt a namespace it does not own,
+// spec.namespace is immutable, and the conflict does not requeue. Admission is
+// the last point at which the caller can still be told to pick another name.
+//
+// Only meaningful on create; afterwards the namespace exists precisely because
+// reconcile created it.
+func ValidateNamespaceAvailable(ctx context.Context, reader client.Reader, ws *tenantv1alpha1.Workspace) error {
+	err := reader.Get(ctx, types.NamespacedName{Name: ws.Spec.Namespace}, &corev1.Namespace{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("checking whether namespace %q is available: %w", ws.Spec.Namespace, err)
+	}
+	return fmt.Errorf(
+		"namespace %q already exists: a workspace creates its own namespace, so choose a different spec.namespace or leave it empty to have one generated",
+		ws.Spec.Namespace)
+}
+
 // ReconcileNamespace ensures the Namespace exists and is properly labeled.
 func ReconcileNamespace(ctx context.Context, c client.Client, scheme *runtime.Scheme, w *tenantv1alpha1.Workspace, version string) error {
 	namespace := &corev1.Namespace{
@@ -78,7 +102,7 @@ func ReconcileNamespace(ctx context.Context, c client.Client, scheme *runtime.Sc
 	rancherProjectID := globalConfig[RancherProjectIDKey]
 
 	op, err := ctrlutil.CreateOrUpdate(ctx, c, namespace, func() error {
-		// Safety check: Prevent taking over existing namespaces not owned by us
+		// Never take over an existing namespace we do not own.
 		if !IsOwned(namespace.OwnerReferences, w.UID) && !namespace.CreationTimestamp.IsZero() {
 			return &NamespaceConflictError{Name: namespace.Name}
 		}
@@ -97,11 +121,14 @@ func ReconcileNamespace(ctx context.Context, c client.Client, scheme *runtime.Sc
 			namespace.Annotations[rancherProjectIDAnnotation] = rancherProjectID
 		}
 
-		// Set OwnerReference to ensure garbage collection works
+		// The OwnerReference is what drives garbage collection.
 		return ctrlutil.SetControllerReference(w, namespace, scheme)
 	})
 	if err != nil {
-		return err
+		// %w, not %v: NamespaceConflictError comes through here from the mutate
+		// function, and the controller classifies it as permanent with errors.As.
+		// Flattening it would silently turn that into a retry loop.
+		return fmt.Errorf("reconciling Namespace %q: %w", namespace.Name, err)
 	}
 	if op != ctrlutil.OperationResultNone {
 		log.FromContext(ctx).Info("Namespace reconciled", "operation", op, "name", namespace.Name)

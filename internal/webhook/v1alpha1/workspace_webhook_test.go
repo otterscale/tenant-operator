@@ -22,11 +22,47 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
 	"github.com/otterscale/tenant-operator/internal/workspace"
 )
+
+// newNamespaceReader returns a reader holding exactly the named Namespaces, so
+// a spec can say which generated names are already taken.
+func newNamespaceReader(names ...string) client.Reader {
+	s := runtime.NewScheme()
+	Expect(corev1.AddToScheme(s)).To(Succeed())
+
+	existing := make([]runtime.Object, 0, len(names))
+	for _, name := range names {
+		existing = append(existing, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}})
+	}
+	return fake.NewClientBuilder().WithScheme(s).WithRuntimeObjects(existing...).Build()
+}
+
+// rejectFirstReader reports the first n names it is asked about as taken and
+// every later one as free, recording what it was asked. That makes the retry
+// observable, in a name space too large to collide in on purpose.
+type rejectFirstReader struct {
+	client.Reader
+	remaining int
+	asked     []string
+}
+
+func (r *rejectFirstReader) Get(_ context.Context, key client.ObjectKey, _ client.Object, _ ...client.GetOption) error {
+	r.asked = append(r.asked, key.Name)
+	if r.remaining > 0 {
+		r.remaining--
+		return nil // found — the name is taken
+	}
+	return apierrors.NewNotFound(corev1.Resource("namespaces"), key.Name)
+}
 
 var _ = Describe("Workspace Webhook", func() {
 	var (
@@ -44,7 +80,7 @@ var _ = Describe("Workspace Webhook", func() {
 				},
 			},
 		}
-		defaulter = WorkspaceCustomDefaulter{}
+		defaulter = WorkspaceCustomDefaulter{Reader: newNamespaceReader()}
 	})
 
 	Context("Member Label Synchronization", func() {
@@ -181,8 +217,33 @@ var _ = Describe("Workspace Webhook", func() {
 			for range 10 {
 				names[generateNamespaceName()] = struct{}{}
 			}
-			// With 6 random chars, 10 calls should produce at least 2 distinct values
 			Expect(len(names)).To(BeNumerically(">=", 2))
+		})
+
+		// A generated name landing on an existing Namespace would produce a
+		// Workspace that can never reconcile and can never be renamed.
+		It("should discard generated names an existing namespace already holds", func() {
+			reader := &rejectFirstReader{remaining: 3}
+			defaulter.Reader = reader
+			obj.Spec.Namespace = ""
+
+			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
+
+			Expect(reader.asked).To(HaveLen(4), "should have kept looking past the three taken names")
+			Expect(reader.asked[:3]).NotTo(ContainElement(obj.Spec.Namespace),
+				"a name reported as taken must not be handed out")
+			Expect(obj.Spec.Namespace).To(Equal(reader.asked[3]))
+		})
+
+		It("should fail admission rather than reuse a name when every candidate is taken", func() {
+			reader := &rejectFirstReader{remaining: namespaceNameAttempts}
+			defaulter.Reader = reader
+			obj.Spec.Namespace = ""
+
+			err := defaulter.Default(context.Background(), obj)
+			Expect(err).To(MatchError(ContainSubstring("could not generate an unused namespace name")))
+			Expect(reader.asked).To(HaveLen(namespaceNameAttempts), "the retry must be bounded")
+			Expect(obj.Spec.Namespace).To(BeEmpty(), "a failed generation must not leave a name behind")
 		})
 	})
 

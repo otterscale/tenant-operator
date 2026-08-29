@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	goerrors "errors"
 	"net/http"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/client-go/rest"
@@ -41,6 +43,7 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
+	"github.com/otterscale/tenant-operator/internal/harbor"
 	"github.com/otterscale/tenant-operator/internal/labels"
 	ws "github.com/otterscale/tenant-operator/internal/workspace"
 )
@@ -87,7 +90,7 @@ var _ = Describe("Workspace Controller", func() {
 	}
 
 	fullyReconcile := func() {
-		executeReconcile() // provisions resources + updates status
+		executeReconcile()
 	}
 
 	fetchResource := func(obj client.Object, name, namespace string) {
@@ -174,21 +177,52 @@ var _ = Describe("Workspace Controller", func() {
 			Expect(workspace.Status.HelmRepositoryRef.Name).To(Equal(ws.HelmRepositoryName))
 		})
 
-		// A robot that already exists returns no credentials, so the image pull
-		// Secret cannot be built. The status must not claim it exists.
-		It("should leave the image pull secret ref unset when the robot predates the secret", func() {
+		// The robot is created before the Secret is written, so a failure in
+		// between leaves a robot with no recoverable credentials. Harbor reveals a
+		// secret only when it sets one, so a fresh one is the only way back.
+		It("should rebuild a missing image pull secret by refreshing the robot secret", func() {
 			harborFake.robotExists = true
 
 			fullyReconcile()
 
-			err := k8sClient.Get(ctx,
-				types.NamespacedName{Name: ws.ImagePullSecretName, Namespace: namespaceName},
-				&corev1.Secret{})
-			Expect(errors.IsNotFound(err)).To(BeTrue(), "no credentials means no image pull secret")
+			Expect(harborFake.refreshes).To(Equal(1), "a missing Secret must trigger exactly one refresh")
+
+			var pullSecret corev1.Secret
+			fetchResource(&pullSecret, ws.ImagePullSecretName, namespaceName)
+			Expect(pullSecret.Data).To(HaveKey(corev1.DockerConfigJsonKey))
+			Expect(string(pullSecret.Data[corev1.DockerConfigJsonKey])).
+				To(ContainSubstring("refreshed-robot-secret"), "the rebuilt Secret must carry the new credentials")
 
 			fetchResource(workspace, resourceName, "")
-			Expect(workspace.Status.ImagePullSecretRef).To(BeNil(),
-				"status must not advertise an image pull secret that was never written")
+			Expect(workspace.Status.ImagePullSecretRef).NotTo(BeNil())
+		})
+
+		// Refreshing invalidates the live secret, so it must only happen when there
+		// is nothing to lose.
+		It("should not refresh the robot secret while the image pull secret is intact", func() {
+			fullyReconcile() // creates the robot and writes the Secret
+
+			harborFake.robotExists = true
+			executeReconcile()
+
+			Expect(harborFake.refreshes).To(BeZero(), "an intact Secret must never be rotated out from under its users")
+
+			var pullSecret corev1.Secret
+			fetchResource(&pullSecret, ws.ImagePullSecretName, namespaceName)
+			Expect(string(pullSecret.Data[corev1.DockerConfigJsonKey])).
+				To(ContainSubstring("fake-robot-secret"), "the original credentials must survive")
+		})
+
+		// Harbor federates against the same OIDC provider as the cluster, so a
+		// member's RBAC subject is already the name Harbor knows it by. Pinning the
+		// value that reaches the Harbor client keeps that assumption checkable.
+		It("should identify a member in Harbor by its RBAC subject", func() {
+			fullyReconcile()
+
+			Expect(harborFake.desiredMembers).To(ConsistOf(harbor.ProjectMember{
+				Username: adminUser,
+				RoleID:   harbor.RoleProjectAdmin,
+			}))
 		})
 
 		It("should report pending Harbor members on the Ready condition", func() {
@@ -206,10 +240,10 @@ var _ = Describe("Workspace Controller", func() {
 	})
 
 	Context("Workspace Config", func() {
-		// The Gateway API is served here but no Gateway objects are deployed, which
-		// is the graceful-degradation case: endpoints cannot be resolved, yet the
-		// operator must still provision the workspace. Endpoint resolution itself
-		// is covered by the workspace package unit tests.
+		// The Gateway API is served here but no Gateway objects exist — the
+		// graceful-degradation case: no endpoints resolve, yet the workspace must
+		// still be provisioned. Resolution itself is covered by the workspace
+		// package's unit tests.
 		It("should provision the workspace when no endpoint source Gateway exists", func() {
 			fullyReconcile()
 
@@ -226,7 +260,7 @@ var _ = Describe("Workspace Controller", func() {
 		})
 
 		It("should remove a workspace-config left over from when endpoints resolved", func() {
-			fullyReconcile() // creates the namespace
+			fullyReconcile()
 
 			stale := &corev1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{Name: ws.ConfigName, Namespace: namespaceName},
@@ -275,10 +309,9 @@ var _ = Describe("Workspace Controller", func() {
 			}).SetupWithManager(mgr)).To(Succeed())
 		})
 
-		// Flux and the Gateway API are prerequisites rather than optional
-		// integrations, so a cluster without their CRDs must be refused at startup
-		// with a message naming the requirement — not left to fail once the
-		// corresponding informer starts.
+		// Flux and the Gateway API are prerequisites, not optional integrations, so
+		// a cluster without their CRDs must be refused at startup with a message
+		// naming the requirement — not left to fail once the informer starts.
 		It("should refuse to start when a required CRD is absent", func() {
 			mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 				Scheme:         k8sClient.Scheme(),
@@ -368,7 +401,7 @@ var _ = Describe("Workspace Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: namespaceName},
 			})).To(Succeed())
 
-			By("Running reconciliation - namespace conflict is a permanent error: should NOT return error (no requeue)")
+			By("Reconciling - a namespace conflict is permanent, so no error and no requeue")
 			nsName := types.NamespacedName{Name: resourceName}
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsName})
 			Expect(err).NotTo(HaveOccurred())
@@ -379,6 +412,56 @@ var _ = Describe("Workspace Controller", func() {
 			Expect(readyCond).NotTo(BeNil())
 			Expect(readyCond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(readyCond.Reason).To(Equal("NamespaceConflict"))
+		})
+	})
+
+	Context("Reconcile Error Classification", func() {
+		// A recorder that has seen nothing, so assertions about one call's events
+		// are not confused by the reconcile before it.
+		freshRecorder := func() *events.FakeRecorder {
+			recorder := events.NewFakeRecorder(10)
+			reconciler.Recorder = recorder
+			return recorder
+		}
+
+		// Every domain sync reads then writes, so a concurrent write surfaces as a
+		// 409. The next attempt re-reads and succeeds — a retry, not a failure.
+		It("should retry a conflicting write without touching status or events", func() {
+			fullyReconcile()
+			fetchResource(workspace, resourceName, "")
+			Expect(apimeta.FindStatusCondition(workspace.Status.Conditions, "Ready").Status).
+				To(Equal(metav1.ConditionTrue))
+
+			recorder := freshRecorder()
+			conflict := errors.NewConflict(
+				schema.GroupResource{Resource: "resourcequotas"},
+				ws.ResourceQuotaName,
+				goerrors.New("the object has been modified"))
+
+			result, err := reconciler.handleReconcileError(ctx, workspace, conflict)
+			Expect(err).To(MatchError(conflict), "the conflict is handed back for the rate-limited retry")
+			Expect(result.IsZero()).To(BeTrue())
+			Expect(recorder.Events).To(BeEmpty(), "a routine conflict must not raise a Warning")
+
+			fetchResource(workspace, resourceName, "")
+			Expect(apimeta.FindStatusCondition(workspace.Status.Conditions, "Ready").Status).
+				To(Equal(metav1.ConditionTrue), "Ready must survive a conflict untouched")
+		})
+
+		// EventRecorder.Eventf treats its note as a format string, and Harbor error
+		// notes carry percent-encoded response bodies.
+		It("should record an error note containing % verbatim", func() {
+			fullyReconcile()
+
+			recorder := freshRecorder()
+			_, err := reconciler.handleReconcileError(ctx, workspace,
+				goerrors.New(`ensuring Harbor project: unexpected status 400: {"message":"bad path /a%2Fb"}`))
+			Expect(err).To(HaveOccurred())
+
+			var note string
+			Eventually(recorder.Events).Should(Receive(&note))
+			Expect(note).To(ContainSubstring("/a%2Fb"))
+			Expect(note).NotTo(ContainSubstring("%!"), "the note must not be re-expanded as a format string")
 		})
 	})
 
@@ -505,7 +588,7 @@ var _ = Describe("Workspace Controller", func() {
 
 			By("Denying non-admin update")
 			viewClient := createImpersonatedClient(viewUser)
-			fetchResource(&latestWs, resourceName, "") // Refresh
+			fetchResource(&latestWs, resourceName, "")
 
 			latestWs.Spec.NetworkIsolation.Enabled = false
 			err := viewClient.Update(ctx, &latestWs)

@@ -35,8 +35,7 @@ const (
 	defaultKindCluster = "kind"
 
 	// thirdPartyCRDDir holds the CRDs owned by other projects that the operator
-	// requires the cluster to serve. Relative to the project directory Run
-	// executes commands in.
+	// requires the cluster to serve, relative to the directory Run works in.
 	thirdPartyCRDDir = "test/crd"
 )
 
@@ -44,7 +43,7 @@ func warnError(err error) {
 	_, _ = fmt.Fprintf(GinkgoWriter, "warning: %v\n", err)
 }
 
-// Run executes the provided command within this context
+// Run executes cmd from the project directory.
 func Run(cmd *exec.Cmd) (string, error) {
 	dir, _ := GetProjectDir()
 	cmd.Dir = dir
@@ -64,7 +63,7 @@ func Run(cmd *exec.Cmd) (string, error) {
 	return string(output), nil
 }
 
-// UninstallCertManager uninstalls the cert manager
+// UninstallCertManager uninstalls cert-manager.
 func UninstallCertManager() {
 	url := fmt.Sprintf(certmanagerURLTmpl, certmanagerVersion)
 	cmd := exec.Command("kubectl", "delete", "-f", url)
@@ -72,7 +71,7 @@ func UninstallCertManager() {
 		warnError(err)
 	}
 
-	// Delete leftover leases in kube-system (not cleaned by default)
+	// Leases in kube-system are not cleaned up by the uninstall.
 	kubeSystemLeases := []string{
 		"cert-manager-cainjector-leader-election",
 		"cert-manager-controller",
@@ -86,15 +85,14 @@ func UninstallCertManager() {
 	}
 }
 
-// InstallCertManager installs the cert manager bundle.
+// InstallCertManager installs the cert-manager bundle.
 func InstallCertManager() error {
 	url := fmt.Sprintf(certmanagerURLTmpl, certmanagerVersion)
 	cmd := exec.Command("kubectl", "apply", "-f", url)
 	if _, err := Run(cmd); err != nil {
 		return err
 	}
-	// Wait for cert-manager-webhook to be ready, which can take time if cert-manager
-	// was re-installed after uninstalling on a cluster.
+	// The webhook can take a while to come up, especially on a re-install.
 	cmd = exec.Command("kubectl", "wait", "deployment.apps/cert-manager-webhook",
 		"--for", "condition=Available",
 		"--namespace", "cert-manager",
@@ -105,10 +103,8 @@ func InstallCertManager() error {
 	return err
 }
 
-// IsCertManagerCRDsInstalled checks if any Cert Manager CRDs are installed
-// by verifying the existence of key CRDs related to Cert Manager.
+// IsCertManagerCRDsInstalled reports whether any cert-manager CRD is present.
 func IsCertManagerCRDsInstalled() bool {
-	// List of common Cert Manager CRDs
 	certManagerCRDs := []string{
 		"certificates.cert-manager.io",
 		"issuers.cert-manager.io",
@@ -118,14 +114,12 @@ func IsCertManagerCRDsInstalled() bool {
 		"challenges.acme.cert-manager.io",
 	}
 
-	// Execute the kubectl command to get all CRDs
 	cmd := exec.Command("kubectl", "get", "crds")
 	output, err := Run(cmd)
 	if err != nil {
 		return false
 	}
 
-	// Check if any of the Cert Manager CRDs are present
 	crdList := GetNonEmptyLines(output)
 	for _, crd := range certManagerCRDs {
 		for _, line := range crdList {
@@ -138,18 +132,17 @@ func IsCertManagerCRDsInstalled() bool {
 	return false
 }
 
-// InstallThirdPartyCRDs installs the third-party CRDs the operator requires —
-// Flux's HelmRepository and the Gateway API's Gateway. SetupWithManager refuses
-// to start unless the cluster serves both, so the manager crash-loops without
-// them. See test/crd/README.md to refresh the copies.
+// InstallThirdPartyCRDs installs the CRDs the operator requires — Flux's
+// HelmRepository and the Gateway API's Gateway. SetupWithManager refuses to
+// start without them. See test/crd/README.md to refresh the copies.
 func InstallThirdPartyCRDs() error {
 	cmd := exec.Command("kubectl", "apply", "-f", thirdPartyCRDDir)
 	if _, err := Run(cmd); err != nil {
 		return err
 	}
 
-	// The operator reads the RESTMapper once at startup, so the kinds have to be
-	// served before the manager is deployed, not merely accepted by the API server.
+	// The operator reads the RESTMapper once at startup, so the kinds must be
+	// served — not merely accepted — before the manager is deployed.
 	cmd = exec.Command("kubectl", "wait", "--for", "condition=Established",
 		"-f", thirdPartyCRDDir, "--timeout", "2m")
 	_, err := Run(cmd)
@@ -164,7 +157,7 @@ func UninstallThirdPartyCRDs() {
 	}
 }
 
-// LoadImageToKindClusterWithName loads a local docker image to the kind cluster
+// LoadImageToKindClusterWithName loads a local docker image into the kind cluster.
 func LoadImageToKindClusterWithName(name string) error {
 	cluster := defaultKindCluster
 	if v, ok := os.LookupEnv("KIND_CLUSTER"); ok {
@@ -180,8 +173,7 @@ func LoadImageToKindClusterWithName(name string) error {
 	return err
 }
 
-// GetNonEmptyLines converts given command output string into individual objects
-// according to line breakers, and ignores the empty elements in it.
+// GetNonEmptyLines splits command output into lines, dropping empty ones.
 func GetNonEmptyLines(output string) []string {
 	var res []string
 	elements := strings.SplitSeq(output, "\n")
@@ -194,7 +186,7 @@ func GetNonEmptyLines(output string) []string {
 	return res
 }
 
-// GetProjectDir will return the directory where the project is
+// GetProjectDir returns the project's root directory.
 func GetProjectDir() (string, error) {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -204,8 +196,8 @@ func GetProjectDir() (string, error) {
 	return wd, nil
 }
 
-// UncommentCode searches for target in the file and remove the comment prefix
-// of the target content. The target content may span multiple lines.
+// UncommentCode strips prefix from every line of target within the file. The
+// target content may span multiple lines.
 func UncommentCode(filename, target, prefix string) error {
 	// false positive
 	// nolint:gosec

@@ -18,6 +18,7 @@ package workspace
 
 import (
 	"context"
+	"fmt"
 
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -36,7 +37,7 @@ func ReconcileRoleBindings(ctx context.Context, c client.Client, scheme *runtime
 		membersByRole[member.Role] = append(membersByRole[member.Role], member)
 	}
 
-	// Reconcile bindings for each known role in deterministic order
+	// Deterministic order.
 	for _, role := range tenantv1alpha1.AllMemberRoles() {
 		if err := reconcileRoleBinding(ctx, c, scheme, w, version, role, membersByRole[role]); err != nil {
 			return err
@@ -45,8 +46,8 @@ func ReconcileRoleBindings(ctx context.Context, c client.Client, scheme *runtime
 	return nil
 }
 
-// reconcileRoleBinding manages the binding between a Role and a list of Members.
-// It deletes the binding if there are no members for that role.
+// reconcileRoleBinding binds a role to its members, deleting the binding when
+// the role has none.
 func reconcileRoleBinding(ctx context.Context, c client.Client, scheme *runtime.Scheme, w *tenantv1alpha1.Workspace, version string, role tenantv1alpha1.MemberRole, members []tenantv1alpha1.WorkspaceMember) error {
 	binding := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
@@ -55,9 +56,11 @@ func reconcileRoleBinding(ctx context.Context, c client.Client, scheme *runtime.
 		},
 	}
 
-	// Clean up if no members have this role
 	if len(members) == 0 {
-		return client.IgnoreNotFound(c.Delete(ctx, binding))
+		if err := client.IgnoreNotFound(c.Delete(ctx, binding)); err != nil {
+			return fmt.Errorf("deleting RoleBinding for role %q: %w", role, err)
+		}
+		return nil
 	}
 
 	op, err := ctrlutil.CreateOrUpdate(ctx, c, binding, func() error {
@@ -78,7 +81,7 @@ func reconcileRoleBinding(ctx context.Context, c client.Client, scheme *runtime.
 		return ctrlutil.SetControllerReference(w, binding, scheme)
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("reconciling RoleBinding for role %q: %w", role, err)
 	}
 	if op != ctrlutil.OperationResultNone {
 		log.FromContext(ctx).Info("RoleBinding reconciled", "operation", op, "name", binding.Name)

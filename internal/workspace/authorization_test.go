@@ -19,18 +19,21 @@ package workspace_test
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
+	authorizationv1 "k8s.io/api/authorization/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/validate/content"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
 
@@ -58,39 +61,54 @@ func newWorkspaceWithName(name, namespace string, members []tenantv1alpha1.Works
 	}
 }
 
-func newFakeReader(objs ...runtime.Object) client.Reader {
+// newFakeClient stands in for the cluster authorizer: a SubjectAccessReview is
+// answered "allowed" when its user, or any of its groups, appears in
+// clusterWide. Everything else behaves as the normal fake.
+//
+// The production check is a wildcard SubjectAccessReview, so the fake only has
+// to decide who the authorizer would wave through; it does not model RBAC.
+func newFakeClient(clusterWide []string, objs ...runtime.Object) client.Client {
 	s := runtime.NewScheme()
-	_ = rbacv1.AddToScheme(s)
+	_ = corev1.AddToScheme(s)
+	_ = authorizationv1.AddToScheme(s)
 	_ = tenantv1alpha1.AddToScheme(s)
-	return fake.NewClientBuilder().WithScheme(s).WithRuntimeObjects(objs...).Build()
-}
 
-// ---------------------------------------------------------------------------
-// AuthorizeCreation
-// ---------------------------------------------------------------------------
+	allowed := func(review *authorizationv1.SubjectAccessReview) bool {
+		if slices.Contains(clusterWide, review.Spec.User) {
+			return true
+		}
+		return slices.ContainsFunc(review.Spec.Groups, func(g string) bool {
+			return slices.Contains(clusterWide, g)
+		})
+	}
+
+	return fake.NewClientBuilder().
+		WithScheme(s).
+		WithRuntimeObjects(objs...).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				review, ok := obj.(*authorizationv1.SubjectAccessReview)
+				if !ok {
+					return c.Create(ctx, obj, opts...)
+				}
+				review.Status.Allowed = allowed(review)
+				return nil
+			},
+		}).
+		Build()
+}
 
 var _ = Describe("AuthorizeCreation", func() {
 	var (
-		ctx    context.Context
-		reader client.Reader
-		ws     *tenantv1alpha1.Workspace
+		ctx context.Context
+		c   client.Client
+		ws  *tenantv1alpha1.Workspace
 	)
 
 	Context("role and identity checks", func() {
 		BeforeEach(func() {
 			ctx = context.Background()
-			clusterAdminBinding := &rbacv1.ClusterRoleBinding{
-				ObjectMeta: metav1.ObjectMeta{Name: "cluster-admin-binding"},
-				RoleRef: rbacv1.RoleRef{
-					APIGroup: rbacv1.GroupName,
-					Kind:     "ClusterRole",
-					Name:     "cluster-admin",
-				},
-				Subjects: []rbacv1.Subject{
-					{Kind: rbacv1.UserKind, Name: "super-admin"},
-				},
-			}
-			reader = newFakeReader(clusterAdminBinding)
+			c = newFakeClient([]string{"super-admin"})
 			ws = newWorkspace([]tenantv1alpha1.WorkspaceMember{
 				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
 				{Role: tenantv1alpha1.MemberRoleEdit, Subject: "bob"},
@@ -99,7 +117,7 @@ var _ = Describe("AuthorizeCreation", func() {
 
 		DescribeTable("should allow or deny based on caller identity",
 			func(user authenticationv1.UserInfo, shouldSucceed bool) {
-				err := workspace.AuthorizeCreation(ctx, reader, user, ws)
+				err := workspace.AuthorizeCreation(ctx, c, user, ws)
 				if shouldSucceed {
 					Expect(err).NotTo(HaveOccurred())
 				} else {
@@ -123,45 +141,23 @@ var _ = Describe("AuthorizeCreation", func() {
 
 })
 
-// ---------------------------------------------------------------------------
-// AuthorizeModification
-// ---------------------------------------------------------------------------
-
 var _ = Describe("AuthorizeModification", func() {
 	var (
-		ctx    context.Context
-		reader client.Reader
-		ws     *tenantv1alpha1.Workspace
+		ctx context.Context
+		c   client.Client
+		ws  *tenantv1alpha1.Workspace
 	)
 
 	Context("role and identity checks", func() {
 		BeforeEach(func() {
 			ctx = context.Background()
-			clusterAdminBinding := &rbacv1.ClusterRoleBinding{
-				ObjectMeta: metav1.ObjectMeta{Name: "cluster-admin-binding"},
-				RoleRef: rbacv1.RoleRef{
-					APIGroup: rbacv1.GroupName,
-					Kind:     "ClusterRole",
-					Name:     "cluster-admin",
-				},
-				Subjects: []rbacv1.Subject{
-					{Kind: rbacv1.UserKind, Name: "super-admin"},
-					{Kind: rbacv1.GroupKind, Name: "ops-team"},
-					{Kind: rbacv1.ServiceAccountKind, Name: "deployer", Namespace: "ci"},
-				},
-			}
-			nonPrivilegedBinding := &rbacv1.ClusterRoleBinding{
-				ObjectMeta: metav1.ObjectMeta{Name: "view-binding"},
-				RoleRef: rbacv1.RoleRef{
-					APIGroup: rbacv1.GroupName,
-					Kind:     "ClusterRole",
-					Name:     "view",
-				},
-				Subjects: []rbacv1.Subject{
-					{Kind: rbacv1.UserKind, Name: "viewer"},
-				},
-			}
-			reader = newFakeReader(clusterAdminBinding, nonPrivilegedBinding)
+			// Cluster-wide access for a user, a group and a service account;
+			// "viewer" is a user the authorizer knows but does not grant it to.
+			c = newFakeClient([]string{
+				"super-admin",
+				"ops-team",
+				"system:serviceaccount:ci:deployer",
+			})
 			ws = newWorkspace([]tenantv1alpha1.WorkspaceMember{
 				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
 				{Role: tenantv1alpha1.MemberRoleEdit, Subject: "bob"},
@@ -171,7 +167,7 @@ var _ = Describe("AuthorizeModification", func() {
 
 		DescribeTable("should allow or deny based on caller identity",
 			func(user authenticationv1.UserInfo, shouldSucceed bool) {
-				err := workspace.AuthorizeModification(ctx, reader, user, ws)
+				err := workspace.AuthorizeModification(ctx, c, user, ws)
 				if shouldSucceed {
 					Expect(err).NotTo(HaveOccurred())
 				} else {
@@ -188,19 +184,19 @@ var _ = Describe("AuthorizeModification", func() {
 			// Workspace admin
 			Entry("workspace admin member is allowed",
 				authenticationv1.UserInfo{Username: "alice"}, true),
-			// Privileged ClusterRole via ClusterRoleBinding
-			Entry("user bound to cluster-admin via User subject",
+			// Cluster-wide access, as answered by the authorizer
+			Entry("user granted cluster-wide access is allowed",
 				authenticationv1.UserInfo{Username: "super-admin"}, true),
-			Entry("user in group bound to cluster-admin via Group subject",
+			Entry("user whose group is granted cluster-wide access is allowed",
 				authenticationv1.UserInfo{Username: "someone", Groups: []string{"ops-team"}}, true),
-			Entry("service account bound to cluster-admin via ServiceAccount subject",
+			Entry("service account granted cluster-wide access is allowed",
 				authenticationv1.UserInfo{Username: "system:serviceaccount:ci:deployer"}, true),
 			// Denied
 			Entry("workspace edit member is denied",
 				authenticationv1.UserInfo{Username: "bob"}, false),
 			Entry("workspace view member is denied",
 				authenticationv1.UserInfo{Username: "charlie"}, false),
-			Entry("user bound to non-privileged role only is denied",
+			Entry("user without cluster-wide access is denied",
 				authenticationv1.UserInfo{Username: "viewer"}, false),
 			Entry("unknown user is denied",
 				authenticationv1.UserInfo{Username: "mallory"}, false),
@@ -214,17 +210,17 @@ var _ = Describe("AuthorizeModification", func() {
 	Context("with empty members", func() {
 		BeforeEach(func() {
 			ctx = context.Background()
-			reader = newFakeReader()
+			c = newFakeClient(nil)
 			ws = newWorkspace(nil)
 		})
 
 		It("should deny a regular user", func() {
-			err := workspace.AuthorizeModification(ctx, reader, authenticationv1.UserInfo{Username: "alice"}, ws)
+			err := workspace.AuthorizeModification(ctx, c, authenticationv1.UserInfo{Username: "alice"}, ws)
 			Expect(err).To(HaveOccurred())
 		})
 
 		It("should allow a privileged user", func() {
-			err := workspace.AuthorizeModification(ctx, reader, authenticationv1.UserInfo{
+			err := workspace.AuthorizeModification(ctx, c, authenticationv1.UserInfo{
 				Username: "admin",
 				Groups:   []string{"system:masters"},
 			}, ws)
@@ -232,31 +228,16 @@ var _ = Describe("AuthorizeModification", func() {
 		})
 	})
 
-	Context("RoleRef.Kind validation", func() {
-		It("should ignore bindings whose RoleRef.Kind is not ClusterRole", func() {
-			binding := &rbacv1.ClusterRoleBinding{
-				ObjectMeta: metav1.ObjectMeta{Name: "role-not-clusterrole"},
-				RoleRef: rbacv1.RoleRef{
-					APIGroup: rbacv1.GroupName,
-					Kind:     "Role",
-					Name:     "cluster-admin",
-				},
-				Subjects: []rbacv1.Subject{
-					{Kind: rbacv1.UserKind, Name: "tricky-user"},
-				},
-			}
-			reader := newFakeReader(binding)
-			ws := newWorkspace(nil)
-
-			err := workspace.AuthorizeModification(context.Background(), reader, authenticationv1.UserInfo{Username: "tricky-user"}, ws)
+	// The authorizer is the only source of truth now, so a caller it denies is
+	// denied however the cluster's RBAC happens to be shaped.
+	Context("authorizer failures", func() {
+		It("should deny a user the authorizer does not grant cluster-wide access", func() {
+			err := workspace.AuthorizeModification(context.Background(), newFakeClient([]string{"someone-else"}),
+				authenticationv1.UserInfo{Username: "tricky-user"}, newWorkspace(nil))
 			Expect(err).To(HaveOccurred())
 		})
 	})
 })
-
-// ---------------------------------------------------------------------------
-// ValidateNamespaceUniqueness
-// ---------------------------------------------------------------------------
 
 var _ = Describe("ValidateNamespaceUniqueness", func() {
 	var (
@@ -269,7 +250,7 @@ var _ = Describe("ValidateNamespaceUniqueness", func() {
 	})
 
 	It("should allow creation when no other workspace uses the namespace", func() {
-		reader = newFakeReader(
+		reader = newFakeClient(nil,
 			newWorkspaceWithName("ws-other", "ns-other", []tenantv1alpha1.WorkspaceMember{
 				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
 			}),
@@ -283,7 +264,7 @@ var _ = Describe("ValidateNamespaceUniqueness", func() {
 	})
 
 	It("should deny creation when another workspace already uses the namespace", func() {
-		reader = newFakeReader(
+		reader = newFakeClient(nil,
 			newWorkspaceWithName("ws-existing", "shared-ns", []tenantv1alpha1.WorkspaceMember{
 				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
 			}),
@@ -298,7 +279,7 @@ var _ = Describe("ValidateNamespaceUniqueness", func() {
 	})
 
 	It("should not conflict with itself (same name)", func() {
-		reader = newFakeReader(
+		reader = newFakeClient(nil,
 			newWorkspaceWithName("ws-self", "ns-self", []tenantv1alpha1.WorkspaceMember{
 				{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
 			}),
@@ -312,7 +293,7 @@ var _ = Describe("ValidateNamespaceUniqueness", func() {
 	})
 
 	It("should allow creation when no workspaces exist", func() {
-		reader = newFakeReader()
+		reader = newFakeClient(nil)
 		ws := newWorkspaceWithName("ws-first", "ns-first", []tenantv1alpha1.WorkspaceMember{
 			{Role: tenantv1alpha1.MemberRoleAdmin, Subject: "alice"},
 		})
@@ -322,9 +303,44 @@ var _ = Describe("ValidateNamespaceUniqueness", func() {
 	})
 })
 
-// ---------------------------------------------------------------------------
-// ValidateWorkspaceName
-// ---------------------------------------------------------------------------
+var _ = Describe("ValidateNamespaceAvailable", func() {
+	var ctx context.Context
+
+	BeforeEach(func() {
+		ctx = context.Background()
+	})
+
+	newNamespace := func(name string) *corev1.Namespace {
+		return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	}
+
+	It("should allow a namespace nothing has created yet", func() {
+		reader := newFakeClient(nil, newNamespace("someone-elses-ns"))
+		ws := newWorkspaceWithName("ws-new", "ns-free", nil)
+
+		Expect(workspace.ValidateNamespaceAvailable(ctx, reader, ws)).To(Succeed())
+	})
+
+	// Admitting this would produce a NamespaceConflictError on every reconcile,
+	// with no way out: reconcile will not adopt the namespace and spec.namespace
+	// is immutable. The rejection has to happen here or not at all.
+	It("should deny a namespace that already exists", func() {
+		reader := newFakeClient(nil, newNamespace("taken-ns"))
+		ws := newWorkspaceWithName("ws-new", "taken-ns", nil)
+
+		err := workspace.ValidateNamespaceAvailable(ctx, reader, ws)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(`namespace "taken-ns" already exists`))
+		Expect(err.Error()).To(ContainSubstring("spec.namespace"), "the message should say how to proceed")
+	})
+
+	It("should allow when the cluster has no namespaces at all", func() {
+		reader := newFakeClient(nil)
+		ws := newWorkspaceWithName("ws-first", "ns-first", nil)
+
+		Expect(workspace.ValidateNamespaceAvailable(ctx, reader, ws)).To(Succeed())
+	})
+})
 
 var _ = Describe("ValidateWorkspaceName", func() {
 	It("should allow a name shorter than the label value limit", func() {

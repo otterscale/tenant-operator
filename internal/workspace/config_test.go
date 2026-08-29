@@ -61,9 +61,8 @@ func platformGateway(namespace string, addresses ...string) *gatewayv1.Gateway {
 func TestResolveExternalAddress(t *testing.T) {
 	t.Parallel()
 
-	// wantErr distinguishes the two skip reasons ReconcileConfig keys off:
-	// a missing Gateway (NotFound) versus one that exists but is misconfigured
-	// (errGatewayAddressUnusable). Anything else must surface as a real error.
+	// The two skip reasons ReconcileConfig keys off: a missing Gateway versus one
+	// that exists but is misconfigured. Anything else is a real error.
 	const (
 		errNone = iota
 		errNotFound
@@ -184,8 +183,8 @@ func modelGateway(listeners ...gatewayv1.Listener) *gatewayv1.Gateway {
 	}
 }
 
-// listener builds a Listener with a unique name. The name is deliberately
-// unrelated to the protocol: endpoint resolution must key off Protocol only.
+// listener builds a Listener whose name is deliberately unrelated to its
+// protocol: endpoint resolution must key off Protocol only.
 func listener(protocol gatewayv1.ProtocolType, port int32, hostname *string) gatewayv1.Listener {
 	l := gatewayv1.Listener{
 		Name:     gatewayv1.SectionName(fmt.Sprintf("listener-%d", port)),
