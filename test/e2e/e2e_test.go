@@ -33,24 +33,20 @@ import (
 	"github.com/otterscale/tenant-operator/test/utils"
 )
 
-// namespace where the project is deployed in
-const namespace = "otterscale-system"
+const (
+	// namespace the project is deployed in.
+	namespace = "otterscale-system"
 
-// serviceAccountName created for the project
-const serviceAccountName = "tenant-operator-controller-manager"
+	serviceAccountName = "tenant-operator-controller-manager"
+	metricsServiceName = "tenant-operator-controller-manager-metrics-service"
 
-// metricsServiceName is the name of the metrics service of the project
-const metricsServiceName = "tenant-operator-controller-manager-metrics-service"
-
-// metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
-const metricsRoleBindingName = "tenant-operator-metrics-binding"
+	// metricsRoleBindingName grants the service account access to the metrics.
+	metricsRoleBindingName = "tenant-operator-metrics-binding"
+)
 
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
 
-	// Before running the tests, set up the environment by creating the namespace,
-	// enforce the restricted security policy to the namespace, installing CRDs,
-	// and deploying the controller.
 	BeforeAll(func() {
 		By("creating manager namespace")
 		cmd := exec.Command("kubectl", "create", "ns", namespace)
@@ -77,8 +73,6 @@ var _ = Describe("Manager", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 	})
 
-	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
-	// and deleting the namespace.
 	AfterAll(func() {
 		// Cluster-scoped, so deleting the namespace does not reclaim it. Left
 		// behind, it makes the next run on the same cluster fail at creation.
@@ -107,8 +101,7 @@ var _ = Describe("Manager", Ordered, func() {
 		_, _ = utils.Run(cmd)
 	})
 
-	// After each test, check for failures and collect logs, events,
-	// and pod descriptions for debugging.
+	// Collect logs, events and pod descriptions on failure, for debugging.
 	AfterEach(func() {
 		specReport := CurrentSpecReport()
 		if specReport.Failed() {
@@ -369,9 +362,8 @@ var _ = Describe("Manager", Ordered, func() {
 	})
 })
 
-// serviceAccountToken returns a token for the specified service account in the given namespace.
-// It uses the Kubernetes TokenRequest API to generate a token by directly sending a request
-// and parsing the resulting token from the API response.
+// serviceAccountToken mints a token for serviceAccountName via the Kubernetes
+// TokenRequest API.
 func serviceAccountToken() (string, error) {
 	const tokenRequestRawString = `{
 		"apiVersion": "authentication.k8s.io/v1",
@@ -410,15 +402,15 @@ func serviceAccountToken() (string, error) {
 	return out, err
 }
 
-// getMetricsOutput retrieves and returns the logs from the curl pod used to access the metrics endpoint.
+// getMetricsOutput returns the logs of the curl pod that hit the metrics endpoint.
 func getMetricsOutput() (string, error) {
 	By("getting the curl-metrics logs")
 	cmd := exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
 	return utils.Run(cmd)
 }
 
-// tokenRequest is a simplified representation of the Kubernetes TokenRequest API response,
-// containing only the token field that we need to extract.
+// tokenRequest is the Kubernetes TokenRequest API response, cut down to the one
+// field this suite reads.
 type tokenRequest struct {
 	Status struct {
 		Token string `json:"token"`

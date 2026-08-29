@@ -29,9 +29,9 @@ import (
 	"time"
 )
 
-// ErrUserNotFound is returned when Harbor reports the target user does not exist.
-// Callers treat this as a skip signal rather than a hard failure, because the user
-// may be provisioned asynchronously (e.g. on first OIDC login).
+// ErrUserNotFound is returned when Harbor reports the target user does not
+// exist. It is a skip signal, not a hard failure: Harbor provisions users
+// asynchronously, on first OIDC login.
 var ErrUserNotFound = errors.New("harbor user not found")
 
 // Harbor project role IDs.
@@ -42,8 +42,7 @@ const (
 )
 
 // robotsPath is the collection endpoint for robot accounts. Robots are addressed
-// cluster-wide even when they belong to a project, so this is not under
-// /projects/{name}.
+// cluster-wide even when they belong to a project, hence not under /projects/{name}.
 const robotsPath = "/api/v2.0/robots"
 
 // Client defines the operations needed for workspace Harbor integration.
@@ -52,29 +51,25 @@ type Client interface {
 	EnsureProject(ctx context.Context, projectName string) error
 
 	// ReconcileProjectMembers synchronizes the Harbor project membership to match
-	// the desired list of members. It adds missing members, updates roles that
-	// have changed, and removes members that are no longer desired.
+	// desired: adding, re-roling and removing as needed.
 	//
-	// Desired users that do not yet exist in Harbor (404 on add) are skipped and
-	// returned in missingUsers so the caller can schedule a later retry. Skipping
-	// one user does not abort the rest of the loop; an error is only returned for
-	// unrecoverable failures.
+	// Users Harbor does not have yet (404 on add) are skipped and returned in
+	// missingUsers for a later retry, without aborting the rest of the loop. An
+	// error means an unrecoverable failure.
 	ReconcileProjectMembers(ctx context.Context, projectName string, desired []ProjectMember) (missingUsers []string, err error)
 
 	// EnsureRobot ensures the project's robot account exists.
 	//
-	// Credentials come back only when this call created the robot: Harbor
-	// reveals a robot secret at the moment it sets one and never again. A nil
-	// RobotCredentials therefore means "the robot was already there", not
-	// "failed" — callers that need credentials for it must ask
-	// RefreshRobotSecret for a new secret.
+	// Credentials come back only when this call created the robot: Harbor reveals
+	// a robot secret at the moment it sets one and never again. Nil credentials
+	// mean "already there", not "failed" — callers needing credentials for such a
+	// robot must ask RefreshRobotSecret.
 	EnsureRobot(ctx context.Context, projectName string, robotName string) (*RobotCredentials, error)
 
-	// RefreshRobotSecret has Harbor issue a new secret for an existing robot and
-	// returns it. This invalidates the robot's previous secret, so it is meant
-	// for rebuilding credentials that were lost rather than for routine use.
-	//
-	// It is an error to refresh a robot that does not exist.
+	// RefreshRobotSecret has Harbor issue a new secret for an existing robot.
+	// This invalidates the robot's previous secret, so it is for rebuilding lost
+	// credentials rather than routine use. Refreshing a robot that does not exist
+	// is an error.
 	RefreshRobotSecret(ctx context.Context, projectName string, robotName string) (*RobotCredentials, error)
 }
 
@@ -110,10 +105,7 @@ func NewClient(baseURL, username, password string) Client {
 	}
 }
 
-// EnsureProject ensures a Harbor project with the given name exists.
-// It is idempotent: if the project already exists, it returns nil.
 func (c *httpClient) EnsureProject(ctx context.Context, projectName string) error {
-	// Check if project already exists
 	exists, err := c.projectExists(ctx, projectName)
 	if err != nil {
 		return fmt.Errorf("checking Harbor project existence: %w", err)
@@ -122,7 +114,6 @@ func (c *httpClient) EnsureProject(ctx context.Context, projectName string) erro
 		return nil
 	}
 
-	// Create project
 	body := map[string]any{
 		"project_name": projectName,
 		"public":       false,
@@ -148,16 +139,9 @@ type existingMember struct {
 	Username string `json:"entity_name"`
 }
 
-// ReconcileProjectMembers synchronizes the Harbor project membership to match
-// the desired list. It lists current members, then adds/updates/removes as needed.
-//
-// If Harbor returns 404 when adding a user, the user is skipped and recorded in
-// missingUsers — the rest of the reconcile loop continues. Harbor users are
-// provisioned on first login, so missing users are expected to appear later.
 func (c *httpClient) ReconcileProjectMembers(ctx context.Context, projectName string, desired []ProjectMember) ([]string, error) {
 	basePath := fmt.Sprintf("/api/v2.0/projects/%s/members", projectName)
 
-	// List current members
 	resp, err := c.do(ctx, http.MethodGet, basePath, nil)
 	if err != nil {
 		return nil, fmt.Errorf("listing project members: %w", err)
@@ -173,8 +157,8 @@ func (c *httpClient) ReconcileProjectMembers(ctx context.Context, projectName st
 		return nil, fmt.Errorf("decoding project members: %w", err)
 	}
 
-	// Build lookup of existing members by username. We will remove members from this
-	// map as we find them in the desired list. The remaining members will be deleted.
+	// Members are removed from this lookup as they are found in desired; whatever
+	// is left over is no longer wanted and gets deleted.
 	existingByName := make(map[string]existingMember, len(existing))
 	for _, m := range existing {
 		existingByName[m.Username] = m
@@ -182,19 +166,15 @@ func (c *httpClient) ReconcileProjectMembers(ctx context.Context, projectName st
 
 	var missing []string
 
-	// Add or update members, and track which existing members are still desired.
 	for _, d := range desired {
 		if cur, ok := existingByName[d.Username]; ok {
-			// Exists — update role if changed
 			if cur.RoleID != d.RoleID {
 				if err := c.updateProjectMember(ctx, basePath, cur.ID, d.RoleID); err != nil {
 					return nil, fmt.Errorf("updating member %s: %w", d.Username, err)
 				}
 			}
-			// Member is desired, so remove from the map of members to be deleted.
 			delete(existingByName, d.Username)
 		} else {
-			// New member — add
 			if err := c.addProjectMember(ctx, basePath, d.Username, d.RoleID); err != nil {
 				if errors.Is(err, ErrUserNotFound) {
 					missing = append(missing, d.Username)
@@ -205,7 +185,6 @@ func (c *httpClient) ReconcileProjectMembers(ctx context.Context, projectName st
 		}
 	}
 
-	// Remove members no longer in desired list (the ones left in the map).
 	for _, cur := range existingByName {
 		if err := c.deleteProjectMember(ctx, basePath, cur.ID); err != nil {
 			return nil, fmt.Errorf("removing member %s: %w", cur.Username, err)
@@ -233,9 +212,8 @@ func (c *httpClient) addProjectMember(ctx context.Context, basePath, username st
 	case http.StatusCreated, http.StatusConflict:
 		return nil
 	case http.StatusNotFound:
-		// Harbor returns 404 when the target user has not been provisioned yet
-		// (users are created on first OIDC login). Surface a sentinel so callers
-		// can skip-and-retry instead of failing the whole reconcile.
+		// The user has not been provisioned yet — Harbor creates users on first
+		// OIDC login. The sentinel lets callers skip-and-retry.
 		return ErrUserNotFound
 	default:
 		return c.unexpectedStatus("adding project member", resp)
@@ -275,8 +253,6 @@ func (c *httpClient) deleteProjectMember(ctx context.Context, basePath string, m
 	return nil
 }
 
-// EnsureRobot ensures a robot account exists for the given project, returning
-// its credentials only when this call created it.
 func (c *httpClient) EnsureRobot(ctx context.Context, projectName string, robotName string) (*RobotCredentials, error) {
 	existing, err := c.findRobot(ctx, projectName, robotName)
 	if err != nil {
@@ -286,7 +262,6 @@ func (c *httpClient) EnsureRobot(ctx context.Context, projectName string, robotN
 		return nil, nil
 	}
 
-	// Create robot account
 	body := map[string]any{
 		"name":     robotName,
 		"duration": -1,
@@ -313,9 +288,8 @@ func (c *httpClient) EnsureRobot(ctx context.Context, projectName string, robotN
 	case http.StatusCreated:
 		// fall through to decode credentials
 	case http.StatusConflict:
-		// Robot was created between our check and create. Its secret went to
-		// whoever won that race, so this call has none to report — same state as
-		// finding it already there.
+		// Created between the check and the create; its secret went to whoever won
+		// that race, so this call has none to report.
 		return nil, nil
 	default:
 		return nil, c.unexpectedStatus("creating Harbor robot account", resp)
@@ -335,8 +309,6 @@ func (c *httpClient) EnsureRobot(ctx context.Context, projectName string, robotN
 	}, nil
 }
 
-// RefreshRobotSecret has Harbor issue a new secret for the project's existing
-// robot account and returns the resulting credentials.
 func (c *httpClient) RefreshRobotSecret(ctx context.Context, projectName string, robotName string) (*RobotCredentials, error) {
 	existing, err := c.findRobot(ctx, projectName, robotName)
 	if err != nil {
@@ -358,14 +330,13 @@ func (c *httpClient) RefreshRobotSecret(ctx context.Context, projectName string,
 }
 
 // refreshRobotSecret is Harbor's RefreshSec operation: PATCH the robot with an
-// empty RobotSec body and Harbor generates a secret and returns it. Letting
-// Harbor generate it avoids having to satisfy its password policy here.
+// empty RobotSec body and Harbor generates a secret and returns it, sparing us
+// its password policy.
 //
-// This is the one call in this client that was written against Harbor's API
-// reference rather than against a running Harbor. If the deployment's version
-// does not serve it, this function is the only thing that has to change: the
-// fallback is DELETE + re-create the robot, at the cost of a window in which
-// the robot does not exist and pulls fail.
+// This is the one call written against Harbor's API reference rather than a
+// running Harbor. If a deployment's version does not serve it, only this
+// function has to change: the fallback is DELETE + re-create, at the cost of a
+// window in which the robot does not exist and pulls fail.
 func (c *httpClient) refreshRobotSecret(ctx context.Context, robotID int) (string, error) {
 	path := fmt.Sprintf("%s/%d", robotsPath, robotID)
 
@@ -440,17 +411,15 @@ type robotRef struct {
 // findRobot returns the project's robot account, or nil when Harbor has none.
 //
 // /api/v2.0/robots lists robots cluster-wide and pages them, so the query is
-// narrowed to this project server-side: without that the robot could sit on a
-// later page and be reported missing. The exact-name comparison afterwards is
-// what actually decides — Level/ProjectID only bound what has to be paged
-// through.
+// narrowed server-side — otherwise the robot could sit on a later page and be
+// reported missing. The exact-name comparison afterwards is what decides;
+// Level/ProjectID only bound what has to be paged through.
 func (c *httpClient) findRobot(ctx context.Context, projectName, robotName string) (*robotRef, error) {
 	projectID, err := c.getProjectID(ctx, projectName)
 	if err != nil {
 		return nil, err
 	}
 
-	// Build query: Level=project,ProjectID={id},name=~{projectName}+{robotName}
 	q := fmt.Sprintf("Level=project,ProjectID=%d,name=~%s+%s", projectID, projectName, robotName)
 	path := robotsPath + "?q=" + url.QueryEscape(url.QueryEscape(q)) // double escape for query parameter
 

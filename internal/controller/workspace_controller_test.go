@@ -90,7 +90,7 @@ var _ = Describe("Workspace Controller", func() {
 	}
 
 	fullyReconcile := func() {
-		executeReconcile() // provisions resources + updates status
+		executeReconcile()
 	}
 
 	fetchResource := func(obj client.Object, name, namespace string) {
@@ -178,11 +178,8 @@ var _ = Describe("Workspace Controller", func() {
 		})
 
 		// The robot is created before the Secret is written, so a failure in
-		// between leaves a robot with no recoverable credentials. Harbor reveals
-		// a secret only when it sets one, so the way back is to have it issue a
-		// new one. Without that the workspace could never pull again, and
-		// spec.namespace being immutable means it could not even be recreated
-		// under a different name.
+		// between leaves a robot with no recoverable credentials. Harbor reveals a
+		// secret only when it sets one, so a fresh one is the only way back.
 		It("should rebuild a missing image pull secret by refreshing the robot secret", func() {
 			harborFake.robotExists = true
 
@@ -200,9 +197,8 @@ var _ = Describe("Workspace Controller", func() {
 			Expect(workspace.Status.ImagePullSecretRef).NotTo(BeNil())
 		})
 
-		// Refreshing invalidates the live secret, so it must happen only when
-		// there is nothing to lose. A later reconcile of a healthy workspace
-		// must leave the credentials alone.
+		// Refreshing invalidates the live secret, so it must only happen when there
+		// is nothing to lose.
 		It("should not refresh the robot secret while the image pull secret is intact", func() {
 			fullyReconcile() // creates the robot and writes the Secret
 
@@ -218,9 +214,8 @@ var _ = Describe("Workspace Controller", func() {
 		})
 
 		// Harbor federates against the same OIDC provider as the cluster, so a
-		// member's RBAC subject is already the name Harbor knows it by — there is
-		// no second identity to carry. Pinning the value that actually reaches
-		// the Harbor client keeps that assumption checkable rather than implied.
+		// member's RBAC subject is already the name Harbor knows it by. Pinning the
+		// value that reaches the Harbor client keeps that assumption checkable.
 		It("should identify a member in Harbor by its RBAC subject", func() {
 			fullyReconcile()
 
@@ -245,10 +240,10 @@ var _ = Describe("Workspace Controller", func() {
 	})
 
 	Context("Workspace Config", func() {
-		// The Gateway API is served here but no Gateway objects are deployed, which
-		// is the graceful-degradation case: endpoints cannot be resolved, yet the
-		// operator must still provision the workspace. Endpoint resolution itself
-		// is covered by the workspace package unit tests.
+		// The Gateway API is served here but no Gateway objects exist — the
+		// graceful-degradation case: no endpoints resolve, yet the workspace must
+		// still be provisioned. Resolution itself is covered by the workspace
+		// package's unit tests.
 		It("should provision the workspace when no endpoint source Gateway exists", func() {
 			fullyReconcile()
 
@@ -265,7 +260,7 @@ var _ = Describe("Workspace Controller", func() {
 		})
 
 		It("should remove a workspace-config left over from when endpoints resolved", func() {
-			fullyReconcile() // creates the namespace
+			fullyReconcile()
 
 			stale := &corev1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{Name: ws.ConfigName, Namespace: namespaceName},
@@ -314,10 +309,9 @@ var _ = Describe("Workspace Controller", func() {
 			}).SetupWithManager(mgr)).To(Succeed())
 		})
 
-		// Flux and the Gateway API are prerequisites rather than optional
-		// integrations, so a cluster without their CRDs must be refused at startup
-		// with a message naming the requirement — not left to fail once the
-		// corresponding informer starts.
+		// Flux and the Gateway API are prerequisites, not optional integrations, so
+		// a cluster without their CRDs must be refused at startup with a message
+		// naming the requirement — not left to fail once the informer starts.
 		It("should refuse to start when a required CRD is absent", func() {
 			mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 				Scheme:         k8sClient.Scheme(),
@@ -407,7 +401,7 @@ var _ = Describe("Workspace Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: namespaceName},
 			})).To(Succeed())
 
-			By("Running reconciliation - namespace conflict is a permanent error: should NOT return error (no requeue)")
+			By("Reconciling - a namespace conflict is permanent, so no error and no requeue")
 			nsName := types.NamespacedName{Name: resourceName}
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nsName})
 			Expect(err).NotTo(HaveOccurred())
@@ -422,17 +416,16 @@ var _ = Describe("Workspace Controller", func() {
 	})
 
 	Context("Reconcile Error Classification", func() {
-		// Swaps in a recorder that has seen nothing, so an assertion about the
-		// events one call produced is not confused by the reconcile before it.
+		// A recorder that has seen nothing, so assertions about one call's events
+		// are not confused by the reconcile before it.
 		freshRecorder := func() *events.FakeRecorder {
 			recorder := events.NewFakeRecorder(10)
 			reconciler.Recorder = recorder
 			return recorder
 		}
 
-		// Every domain sync reads then writes, so a concurrent write to any
-		// managed resource surfaces as a 409. The next attempt re-reads and
-		// succeeds, which makes it a retry rather than a workspace failure.
+		// Every domain sync reads then writes, so a concurrent write surfaces as a
+		// 409. The next attempt re-reads and succeeds — a retry, not a failure.
 		It("should retry a conflicting write without touching status or events", func() {
 			fullyReconcile()
 			fetchResource(workspace, resourceName, "")
@@ -455,8 +448,8 @@ var _ = Describe("Workspace Controller", func() {
 				To(Equal(metav1.ConditionTrue), "Ready must survive a conflict untouched")
 		})
 
-		// EventRecorder.Eventf treats its note as a format string. Harbor error
-		// notes carry response bodies, where percent-encoding is routine.
+		// EventRecorder.Eventf treats its note as a format string, and Harbor error
+		// notes carry percent-encoded response bodies.
 		It("should record an error note containing % verbatim", func() {
 			fullyReconcile()
 
@@ -595,7 +588,7 @@ var _ = Describe("Workspace Controller", func() {
 
 			By("Denying non-admin update")
 			viewClient := createImpersonatedClient(viewUser)
-			fetchResource(&latestWs, resourceName, "") // Refresh
+			fetchResource(&latestWs, resourceName, "")
 
 			latestWs.Spec.NetworkIsolation.Enabled = false
 			err := viewClient.Update(ctx, &latestWs)

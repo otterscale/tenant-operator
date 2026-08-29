@@ -137,8 +137,8 @@ func TestReconcileNamespaceRancherProjectID(t *testing.T) {
 }
 
 // newNamespaceTest builds a Workspace and a fake client. A non-empty
-// rancherProjectID seeds the tenant-operator-config ConfigMap the operator
-// reads the value from; an empty one leaves the ConfigMap absent.
+// rancherProjectID seeds the tenant-operator-config ConfigMap; an empty one
+// leaves the ConfigMap absent.
 func newNamespaceTest(t *testing.T, rancherProjectID string) (*tenantv1alpha1.Workspace, client.Client, *runtime.Scheme) {
 	t.Helper()
 

@@ -36,10 +36,9 @@ import (
 const (
 	rancherProjectIDAnnotation = "field.cattle.io/projectId"
 
-	// RancherProjectIDKey is the tenant-operator-config key carrying the
-	// Rancher Project ID, in "<cluster-id>:<project-id>" form. It is operator-wide
-	// configuration rather than a Workspace spec field, so every workspace
-	// namespace this operator manages joins the same Rancher Project.
+	// RancherProjectIDKey is the tenant-operator-config key carrying the Rancher
+	// Project ID, as "<cluster-id>:<project-id>". Being operator-wide rather than
+	// a spec field, every managed namespace joins the same Rancher Project.
 	RancherProjectIDKey = "RancherProjectID"
 )
 
@@ -68,14 +67,12 @@ func (e *NamespaceConflictError) Error() string {
 // ValidateNamespaceAvailable reports whether the workspace's target namespace is
 // still free to create.
 //
-// This is the admission-time counterpart of NamespaceConflictError, and exists
-// because that error is unrecoverable: reconcile refuses to adopt a namespace it
-// does not own, spec.namespace is immutable, and the conflict does not requeue —
-// so a Workspace admitted onto an occupied namespace can never become Ready and
-// cannot be repaired, only deleted and recreated. Admission is the last point at
-// which the caller can still be told to pick another name.
+// This is the admission-time counterpart of NamespaceConflictError, which is
+// unrecoverable: reconcile will not adopt a namespace it does not own,
+// spec.namespace is immutable, and the conflict does not requeue. Admission is
+// the last point at which the caller can still be told to pick another name.
 //
-// Only meaningful on create. Afterwards the namespace exists precisely because
+// Only meaningful on create; afterwards the namespace exists precisely because
 // reconcile created it.
 func ValidateNamespaceAvailable(ctx context.Context, reader client.Reader, ws *tenantv1alpha1.Workspace) error {
 	err := reader.Get(ctx, types.NamespacedName{Name: ws.Spec.Namespace}, &corev1.Namespace{})
@@ -105,7 +102,7 @@ func ReconcileNamespace(ctx context.Context, c client.Client, scheme *runtime.Sc
 	rancherProjectID := globalConfig[RancherProjectIDKey]
 
 	op, err := ctrlutil.CreateOrUpdate(ctx, c, namespace, func() error {
-		// Safety check: Prevent taking over existing namespaces not owned by us
+		// Never take over an existing namespace we do not own.
 		if !IsOwned(namespace.OwnerReferences, w.UID) && !namespace.CreationTimestamp.IsZero() {
 			return &NamespaceConflictError{Name: namespace.Name}
 		}
@@ -124,13 +121,13 @@ func ReconcileNamespace(ctx context.Context, c client.Client, scheme *runtime.Sc
 			namespace.Annotations[rancherProjectIDAnnotation] = rancherProjectID
 		}
 
-		// Set OwnerReference to ensure garbage collection works
+		// The OwnerReference is what drives garbage collection.
 		return ctrlutil.SetControllerReference(w, namespace, scheme)
 	})
 	if err != nil {
-		// %w, not %v: the mutate function above returns NamespaceConflictError
-		// through here, and the controller classifies it as permanent with
-		// errors.As. Flattening it would silently turn that into a retry loop.
+		// %w, not %v: NamespaceConflictError comes through here from the mutate
+		// function, and the controller classifies it as permanent with errors.As.
+		// Flattening it would silently turn that into a retry loop.
 		return fmt.Errorf("reconciling Namespace %q: %w", namespace.Name, err)
 	}
 	if op != ctrlutil.OperationResultNone {

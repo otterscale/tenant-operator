@@ -38,17 +38,16 @@ import (
 
 const (
 	// OperatorSecretName is the operator-wide Secret, in OperatorNamespace,
-	// holding the Harbor admin robot credentials. It is read from the cluster on
-	// every reconcile, so rotating the credentials takes effect without
-	// restarting the operator.
+	// holding the Harbor admin robot credentials. It is read on every reconcile,
+	// so rotating the credentials needs no restart.
 	//
-	// Unlike the tenant-operator-config ConfigMap, which is optional, this Secret
-	// is a deployment prerequisite: every workspace gets a Harbor project, so
-	// there is no "Harbor disabled" mode to fall back to.
+	// Unlike the optional tenant-operator-config ConfigMap, this Secret is a
+	// deployment prerequisite: every workspace gets a Harbor project, so there is
+	// no "Harbor disabled" mode to fall back to.
 	OperatorSecretName = "tenant-operator-secret"
 
 	// HarborURLKey, HarborRobotNameKey and HarborRobotSecretKey are the
-	// OperatorSecretName keys carrying the Harbor admin robot credentials.
+	// OperatorSecretName keys carrying those credentials.
 	HarborURLKey         = "HARBOR_URL"
 	HarborRobotNameKey   = "HARBOR_ROBOT_NAME"
 	HarborRobotSecretKey = "HARBOR_ROBOT_SECRET"
@@ -65,12 +64,11 @@ type HarborCredentials struct {
 // OperatorHarborCredentials returns the Harbor credentials held by the
 // operator-wide tenant-operator-secret.
 //
-// The Secret is a deployment prerequisite, not an opt-in, so both a missing
-// Secret and one that does not carry every key are reported as errors. Reconcile
-// surfaces the failure on the Workspace as Ready=False and retries; the watch on
-// the Secret picks the credentials up as soon as they are in place. Degrading to
-// a half-configured — or entirely unconfigured — Harbor client would instead
-// leave workspaces silently missing their registry access.
+// The Secret is a prerequisite, not an opt-in, so both a missing Secret and one
+// short of a key are errors: reconcile reports Ready=False and retries, and the
+// watch on the Secret picks the credentials up as soon as they are in place.
+// Degrading to a half-configured Harbor client would instead leave workspaces
+// silently without registry access.
 func OperatorHarborCredentials(ctx context.Context, c client.Client) (*HarborCredentials, error) {
 	key := types.NamespacedName{Name: OperatorSecretName, Namespace: OperatorNamespace}
 
@@ -105,8 +103,8 @@ func OperatorHarborCredentials(ctx context.Context, c client.Client) (*HarborCre
 	return creds, nil
 }
 
-// IsOperatorSecret reports whether obj is the operator-wide Secret holding
-// the Harbor admin robot credentials.
+// IsOperatorSecret reports whether obj is the operator-wide Harbor credentials
+// Secret.
 func IsOperatorSecret(obj client.Object) bool {
 	if obj == nil {
 		return false
@@ -115,12 +113,12 @@ func IsOperatorSecret(obj client.Object) bool {
 		obj.GetNamespace() == OperatorNamespace
 }
 
-// ReconcileHarbor ensures the Harbor project, robot account, docker-registry Secret,
-// and default ServiceAccount imagePullSecrets are configured for the workspace.
+// ReconcileHarbor ensures the Harbor project, robot account, docker-registry
+// Secret and default ServiceAccount imagePullSecrets are configured.
 //
-// Returns the list of workspace members whose Harbor user accounts do not yet
-// exist. The rest of reconcile completes normally; the caller is expected to
-// requeue so missing members get added once Harbor provisions them.
+// Returns the members whose Harbor user accounts do not exist yet. The rest of
+// reconcile completes normally; the caller requeues so they get added once
+// Harbor provisions them.
 func ReconcileHarbor(
 	ctx context.Context,
 	c client.Client,
@@ -134,13 +132,11 @@ func ReconcileHarbor(
 	projectName := w.Spec.Namespace
 	robotName := w.Spec.Namespace
 
-	// 1. Ensure Harbor project exists
 	if err := harborClient.EnsureProject(ctx, projectName); err != nil {
 		return nil, fmt.Errorf("ensuring Harbor project: %w", err)
 	}
 
-	// 2. Reconcile project members from workspace spec
-	//    Service accounts are excluded — they do not have Harbor user identities.
+	// Service accounts are excluded — they have no Harbor user identity.
 	harborMembers := make([]harbor.ProjectMember, 0, len(w.Spec.Members))
 	for _, m := range w.Spec.Members {
 		if m.ServiceAccount {
@@ -161,7 +157,6 @@ func ReconcileHarbor(
 		logger.Info("Some Harbor users do not exist yet; skipping and will retry on next reconcile", "missing", missingMembers)
 	}
 
-	// 3. Ensure the robot account exists, and end up holding credentials for it.
 	creds, err := harborClient.EnsureRobot(ctx, projectName, robotName)
 	if err != nil {
 		return nil, fmt.Errorf("ensuring Harbor robot account: %w", err)
@@ -169,14 +164,12 @@ func ReconcileHarbor(
 
 	// A robot that was already there yields no credentials — Harbor reveals a
 	// secret only at the moment it sets one. That is fine while the image pull
-	// Secret written when the robot was created is still present. When it is
-	// not, having Harbor issue a new secret is the only way back.
+	// Secret written at creation is still present; when it is not, a new secret
+	// is the only way back.
 	//
-	// The gap is not just manual deletion: the robot is created before the
-	// Secret is written, so any failure in between (a conflict, a restart)
-	// leaves exactly this state. Without the refresh the workspace would be
-	// permanently unable to pull, and nothing short of deleting the Workspace
-	// would fix it.
+	// The gap is not just manual deletion: the robot is created before the Secret
+	// is written, so any failure in between (a conflict, a restart) leaves exactly
+	// this state, and without the refresh the workspace could never pull again.
 	if creds == nil {
 		missing, err := imagePullSecretMissing(ctx, c, w.Spec.Namespace)
 		if err != nil {
@@ -192,17 +185,15 @@ func ReconcileHarbor(
 		}
 	}
 
-	// 4. Write the docker-registry Secret whenever this reconcile obtained
-	//    credentials. Refreshing invalidated the previous secret, so a failure
-	//    here leaves the Secret missing and the next reconcile refreshes again —
-	//    the loop converges instead of getting stuck.
+	// Write the Secret whenever this reconcile obtained credentials. A failure
+	// here leaves the Secret missing and the next reconcile refreshes again, so
+	// the loop converges instead of getting stuck.
 	if creds != nil {
 		if err := reconcileImagePullSecret(ctx, c, scheme, w, version, harborURL, creds); err != nil {
 			return nil, err
 		}
 	}
 
-	// 4. Patch default ServiceAccount to include imagePullSecrets
 	if err := ensureImagePullSecret(ctx, c, w.Spec.Namespace); err != nil {
 		return nil, err
 	}
@@ -211,9 +202,8 @@ func ReconcileHarbor(
 }
 
 // imagePullSecretMissing reports whether the workspace's image pull Secret is
-// absent. A read failure is returned rather than reported as missing: refreshing
-// the robot secret invalidates the live one, so it must not be triggered by a
-// transient API error.
+// absent. A read failure is returned rather than reported as missing: the
+// refresh it would trigger invalidates the live secret.
 func imagePullSecretMissing(ctx context.Context, c client.Client, namespace string) (bool, error) {
 	key := types.NamespacedName{Name: ImagePullSecretName, Namespace: namespace}
 	err := c.Get(ctx, key, &corev1.Secret{})
@@ -274,11 +264,10 @@ const defaultServiceAccountName = "default"
 // ensureImagePullSecret lists the workspace image pull Secret on the namespace's
 // default ServiceAccount.
 //
-// Kubernetes creates that ServiceAccount asynchronously, so on a namespace this
-// reconcile only just created it may not exist yet. It is created here instead of
-// failing the reconcile: Kubernetes considers a namespace with an existing
-// default ServiceAccount satisfied and will not add a second one. No owner
-// reference is set — the ServiceAccount belongs to the namespace, not to us.
+// Kubernetes creates that ServiceAccount asynchronously, so on a freshly created
+// namespace it may not exist yet. Creating it here is safe — Kubernetes will not
+// add a second one. No owner reference is set: the ServiceAccount belongs to the
+// namespace, not to us.
 func ensureImagePullSecret(ctx context.Context, c client.Client, namespace string) error {
 	sa := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
@@ -322,7 +311,8 @@ func harborRoleID(role tenantv1alpha1.MemberRole) int {
 	}
 }
 
-// buildDockerConfigJSON constructs the .dockerconfigjson content for a docker-registry secret.
+// buildDockerConfigJSON builds the .dockerconfigjson content for a
+// docker-registry Secret.
 func buildDockerConfigJSON(registryURL, username, password string) ([]byte, error) {
 	auth := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
 	config := map[string]any{

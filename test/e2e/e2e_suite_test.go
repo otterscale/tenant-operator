@@ -32,18 +32,18 @@ import (
 )
 
 var (
-	// managerImage is the manager image to be built and loaded for testing.
+	// managerImage is built and loaded into the cluster by the suite.
 	managerImage = "example.com/tenant-operator:v0.0.1"
-	// shouldCleanupCertManager tracks whether CertManager was installed by this suite.
+	// shouldCleanupCertManager records whether this suite installed CertManager.
 	shouldCleanupCertManager = false
 )
 
-// TestE2E runs the e2e test suite to validate the solution in an isolated environment.
-// The default setup requires Kind and CertManager.
+// TestE2E runs the e2e suite against an isolated environment. The default setup
+// requires Kind and CertManager.
 //
-// To enable kubectl kuberc (use custom kubectl configurations), set: KUBECTL_KUBERC=true
-// By default, kuberc is disabled to ensure consistent test behavior across different environments.
-// To skip CertManager installation, set: CERT_MANAGER_INSTALL_SKIP=true
+// KUBECTL_KUBERC=true re-enables kubectl kuberc, off by default for consistent
+// behavior across environments. CERT_MANAGER_INSTALL_SKIP=true skips installing
+// CertManager.
 func TestE2E(t *testing.T) {
 	RegisterFailHandler(Fail)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Starting tenant-operator e2e test suite\n")
@@ -70,9 +70,8 @@ var _ = AfterSuite(func() {
 	teardownCertManager()
 })
 
-// Disable kubectl kuberc by default for test isolation.
-// This prevents local kubectl configurations from affecting test behavior.
-// To enable kuberc, set: KUBECTL_KUBERC=true
+// configureKubectlKubeRC disables kubectl kuberc by default, so local kubectl
+// configurations cannot affect the tests.
 func configureKubectlKubeRC() {
 	if os.Getenv("KUBECTL_KUBERC") != "true" {
 		By("disabling kubectl kuberc for test isolation")
@@ -85,8 +84,8 @@ func configureKubectlKubeRC() {
 	}
 }
 
-// setupCertManager installs CertManager if needed for webhook tests.
-// Skips installation if CERT_MANAGER_INSTALL_SKIP=true or if already present.
+// setupCertManager installs CertManager for the webhook tests, unless
+// CERT_MANAGER_INSTALL_SKIP=true or it is already present.
 func setupCertManager() {
 	if os.Getenv("CERT_MANAGER_INSTALL_SKIP") == "true" {
 		_, _ = fmt.Fprintf(GinkgoWriter, "Skipping CertManager installation (CERT_MANAGER_INSTALL_SKIP=true)\n")
@@ -99,15 +98,15 @@ func setupCertManager() {
 		return
 	}
 
-	// Mark for cleanup before installation to handle interruptions and partial installs.
+	// Marked before installing, so an interrupted or partial install is still
+	// cleaned up.
 	shouldCleanupCertManager = true
 
 	By("installing CertManager")
 	Expect(utils.InstallCertManager()).To(Succeed(), "Failed to install CertManager")
 }
 
-// teardownCertManager uninstalls CertManager if it was installed by setupCertManager.
-// This ensures we only remove what we installed.
+// teardownCertManager removes CertManager only if setupCertManager installed it.
 func teardownCertManager() {
 	if !shouldCleanupCertManager {
 		_, _ = fmt.Fprintf(GinkgoWriter, "Skipping CertManager cleanup (not installed by this suite)\n")

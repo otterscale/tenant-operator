@@ -35,8 +35,8 @@ import (
 
 const labelValueTrue = "true"
 
-// ReconcileHelmRepository ensures the workspace has FluxCD OCI sources for
-// both its private Harbor project and Harbor's default public project (library).
+// ReconcileHelmRepository ensures the workspace has FluxCD OCI sources for both
+// its private Harbor project and Harbor's public default project (library).
 func ReconcileHelmRepository(ctx context.Context, c client.Client, scheme *runtime.Scheme, w *tenantv1alpha1.Workspace, version string, harborURL string) error {
 	sources := []struct {
 		name        string
@@ -97,9 +97,10 @@ func ReconcileHelmRepository(ctx context.Context, c client.Client, scheme *runti
 	return nil
 }
 
-// buildHelmRepositoryURL constructs an OCI URL from a Harbor base URL and project name.
-// For example: "https://harbor.example.com" + "my-project" → "oci://harbor.example.com/my-project"
-// It also returns whether the Harbor URL uses an insecure (non-TLS) scheme.
+// buildHelmRepositoryURL turns a Harbor base URL and project name into an OCI
+// URL — "https://harbor.example.com" + "my-project" becomes
+// "oci://harbor.example.com/my-project" — and reports whether the scheme is
+// insecure (non-TLS).
 func buildHelmRepositoryURL(harborURL, projectName string) (repoURL string, insecure bool, err error) {
 	u, err := url.Parse(harborURL)
 	if err != nil {

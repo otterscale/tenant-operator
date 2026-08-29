@@ -61,12 +61,12 @@ func newWorkspaceWithName(name, namespace string, members []tenantv1alpha1.Works
 	}
 }
 
-// newFakeClient builds a client that stands in for the cluster authorizer:
-// a SubjectAccessReview is answered "allowed" when its user, or any of its
-// groups, appears in clusterWide. Everything else behaves as the normal fake.
+// newFakeClient stands in for the cluster authorizer: a SubjectAccessReview is
+// answered "allowed" when its user, or any of its groups, appears in
+// clusterWide. Everything else behaves as the normal fake.
 //
 // The production check is a wildcard SubjectAccessReview, so the fake only has
-// to decide who the authorizer would wave through — it does not model RBAC.
+// to decide who the authorizer would wave through; it does not model RBAC.
 func newFakeClient(clusterWide []string, objs ...runtime.Object) client.Client {
 	s := runtime.NewScheme()
 	_ = corev1.AddToScheme(s)
@@ -97,10 +97,6 @@ func newFakeClient(clusterWide []string, objs ...runtime.Object) client.Client {
 		}).
 		Build()
 }
-
-// ---------------------------------------------------------------------------
-// AuthorizeCreation
-// ---------------------------------------------------------------------------
 
 var _ = Describe("AuthorizeCreation", func() {
 	var (
@@ -145,10 +141,6 @@ var _ = Describe("AuthorizeCreation", func() {
 
 })
 
-// ---------------------------------------------------------------------------
-// AuthorizeModification
-// ---------------------------------------------------------------------------
-
 var _ = Describe("AuthorizeModification", func() {
 	var (
 		ctx context.Context
@@ -159,9 +151,8 @@ var _ = Describe("AuthorizeModification", func() {
 	Context("role and identity checks", func() {
 		BeforeEach(func() {
 			ctx = context.Background()
-			// The authorizer grants cluster-wide access to a user, a group, and a
-			// service account; "viewer" stands for a user it knows but does not
-			// grant that access to.
+			// Cluster-wide access for a user, a group and a service account;
+			// "viewer" is a user the authorizer knows but does not grant it to.
 			c = newFakeClient([]string{
 				"super-admin",
 				"ops-team",
@@ -248,10 +239,6 @@ var _ = Describe("AuthorizeModification", func() {
 	})
 })
 
-// ---------------------------------------------------------------------------
-// ValidateNamespaceUniqueness
-// ---------------------------------------------------------------------------
-
 var _ = Describe("ValidateNamespaceUniqueness", func() {
 	var (
 		ctx    context.Context
@@ -316,10 +303,6 @@ var _ = Describe("ValidateNamespaceUniqueness", func() {
 	})
 })
 
-// ---------------------------------------------------------------------------
-// ValidateNamespaceAvailable
-// ---------------------------------------------------------------------------
-
 var _ = Describe("ValidateNamespaceAvailable", func() {
 	var ctx context.Context
 
@@ -358,10 +341,6 @@ var _ = Describe("ValidateNamespaceAvailable", func() {
 		Expect(workspace.ValidateNamespaceAvailable(ctx, reader, ws)).To(Succeed())
 	})
 })
-
-// ---------------------------------------------------------------------------
-// ValidateWorkspaceName
-// ---------------------------------------------------------------------------
 
 var _ = Describe("ValidateWorkspaceName", func() {
 	It("should allow a name shorter than the label value limit", func() {

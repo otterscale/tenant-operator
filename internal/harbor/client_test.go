@@ -313,8 +313,8 @@ func TestReconcileProjectMembers_SkipsMissingUser(t *testing.T) {
 
 // --- EnsureRobot / RefreshRobotSecret tests ---
 
-// robotTestHandler returns a handler that serves project lookup and robot API requests.
-// robotResponse controls what the robot list endpoint returns.
+// robotTestHandler serves project lookup and robot API requests, with
+// robotResponse standing in for what the robot list endpoint returns.
 func robotTestHandler(t *testing.T, robotResponse []byte, postHandler http.HandlerFunc) http.HandlerFunc {
 	return robotTestHandlerWithPatch(t, robotResponse, postHandler, nil)
 }
@@ -326,12 +326,10 @@ func robotTestHandlerWithPatch(
 ) http.HandlerFunc {
 	t.Helper()
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Robot secret refresh: PATCH /api/v2.0/robots/{id}
 		if r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, robotsPath+"/") && patchHandler != nil {
 			patchHandler(w, r)
 			return
 		}
-		// Project lookup: GET /api/v2.0/projects/test-ns
 		if r.Method == http.MethodGet && r.URL.Path == projectsPath+"/test-ns" {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -339,13 +337,11 @@ func robotTestHandlerWithPatch(
 			})
 			return
 		}
-		// Robot list: GET /api/v2.0/robots?q=...
 		if r.Method == http.MethodGet && r.URL.Path == robotsPath {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write(robotResponse)
 			return
 		}
-		// Robot create: POST /api/v2.0/robots
 		if r.Method == http.MethodPost && r.URL.Path == robotsPath && postHandler != nil {
 			postHandler(w, r)
 			return
@@ -401,8 +397,8 @@ func TestEnsureRobot_AlreadyExists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureRobot returned error: %v", err)
 	}
-	// Harbor reveals a robot secret only when it sets one, so an existing robot
-	// yields no credentials. That is the signal the caller refreshes on.
+	// Harbor reveals a robot secret only when it sets one, so nil credentials are
+	// the signal the caller refreshes on.
 	if creds != nil {
 		t.Errorf("expected nil credentials for an existing robot, got %+v", creds)
 	}
@@ -421,8 +417,8 @@ func TestEnsureRobot_ConflictIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureRobot should treat 409 as success, got error: %v", err)
 	}
-	// Someone created the robot between the check and the create, so its secret
-	// went to them — indistinguishable from finding it already there.
+	// The robot was created between the check and the create, so its secret went
+	// to whoever won — indistinguishable from finding it already there.
 	if creds != nil {
 		t.Errorf("expected nil credentials for conflict, got %+v", creds)
 	}
@@ -443,8 +439,7 @@ func TestEnsureRobot_ServerError(t *testing.T) {
 	}
 }
 
-// existingRobotList is the robot Harbor reports for project test-ns. Its id is
-// what the per-robot endpoints are addressed by.
+// existingRobotList is the robot Harbor reports for project test-ns.
 func existingRobotList(t *testing.T) []byte {
 	t.Helper()
 	body, err := json.Marshal([]map[string]any{
@@ -479,8 +474,8 @@ func TestRefreshRobotSecret_ReturnsNewCredentials(t *testing.T) {
 	if creds.Secret != "brand-new-secret" {
 		t.Errorf("Secret = %q, want brand-new-secret", creds.Secret)
 	}
-	// The refresh response carries only the secret, so the name has to come from
-	// the robot Harbor matched.
+	// The refresh response carries only the secret, so the name comes from the
+	// robot Harbor matched.
 	if creds.Name != "robot$test-ns+workspace-test-ns" {
 		t.Errorf("Name = %q, want robot$test-ns+workspace-test-ns", creds.Name)
 	}
@@ -500,8 +495,8 @@ func TestRefreshRobotSecret_MissingRobotIsAnError(t *testing.T) {
 	}
 }
 
-// An empty secret would be written into the image pull Secret and fail every
-// pull with an authentication error far from here, so it is rejected at source.
+// An empty secret would reach the image pull Secret and fail every pull with an
+// authentication error far from here, so it is rejected at source.
 func TestRefreshRobotSecret_EmptySecretIsAnError(t *testing.T) {
 	patchHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

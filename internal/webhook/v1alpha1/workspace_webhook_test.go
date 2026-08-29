@@ -46,10 +46,9 @@ func newNamespaceReader(names ...string) client.Reader {
 	return fake.NewClientBuilder().WithScheme(s).WithRuntimeObjects(existing...).Build()
 }
 
-// rejectFirstReader reports the first n names it is asked about as existing
-// Namespaces and every later one as free, recording what it was asked. That
-// makes the retry observable: the defaulter cannot pass these specs by getting
-// lucky in a name space too large to collide in on purpose.
+// rejectFirstReader reports the first n names it is asked about as taken and
+// every later one as free, recording what it was asked. That makes the retry
+// observable, in a name space too large to collide in on purpose.
 type rejectFirstReader struct {
 	client.Reader
 	remaining int
@@ -218,13 +217,11 @@ var _ = Describe("Workspace Webhook", func() {
 			for range 10 {
 				names[generateNamespaceName()] = struct{}{}
 			}
-			// With 6 random chars, 10 calls should produce at least 2 distinct values
 			Expect(len(names)).To(BeNumerically(">=", 2))
 		})
 
 		// A generated name landing on an existing Namespace would produce a
-		// Workspace that can never reconcile and can never be renamed, so the
-		// defaulter has to look before it hands one out.
+		// Workspace that can never reconcile and can never be renamed.
 		It("should discard generated names an existing namespace already holds", func() {
 			reader := &rejectFirstReader{remaining: 3}
 			defaulter.Reader = reader

@@ -30,7 +30,7 @@ import (
 	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
 )
 
-// ReconcileResourceQuota applies quota constraints if defined, or deletes the quota if removed.
+// ReconcileResourceQuota applies the quota if defined, or deletes it if removed.
 func ReconcileResourceQuota(ctx context.Context, c client.Client, scheme *runtime.Scheme, w *tenantv1alpha1.Workspace, version string) error {
 	quota := &corev1.ResourceQuota{
 		ObjectMeta: metav1.ObjectMeta{
@@ -60,7 +60,7 @@ func ReconcileResourceQuota(ctx context.Context, c client.Client, scheme *runtim
 	return nil
 }
 
-// ReconcileLimitRange applies default limits if defined, or deletes the range if removed.
+// ReconcileLimitRange applies the limits if defined, or deletes them if removed.
 func ReconcileLimitRange(ctx context.Context, c client.Client, scheme *runtime.Scheme, w *tenantv1alpha1.Workspace, version string) error {
 	limits := &corev1.LimitRange{
 		ObjectMeta: metav1.ObjectMeta{

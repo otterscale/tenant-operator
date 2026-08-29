@@ -93,7 +93,7 @@ func TestReconcileHelmRepositoryCreatesExpectedSources(t *testing.T) {
 			t.Error("expected secure HelmRepository")
 		}
 
-		// The public library source needs no credentials and must remain visible to users.
+		// The public library source needs no credentials and stays user-visible.
 		if repo.Spec.SecretRef != nil {
 			t.Errorf("expected no SecretRef, got %q", repo.Spec.SecretRef.Name)
 		}

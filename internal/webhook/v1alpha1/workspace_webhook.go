@@ -35,13 +35,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
-// SetupWorkspaceWebhookWithManager registers the webhook for Workspace in the manager.
+// SetupWorkspaceWebhookWithManager registers the Workspace webhook.
 //
-// Both hooks read through mgr.GetAPIReader() rather than the manager's cached
-// client. Admission decides whether a name may be claimed at all, so a cache
-// lagging the API server by even a moment would admit the very conflicts these
-// checks exist to prevent. Workspaces are created by hand and are few, so the
-// extra round trip costs nothing that matters.
+// Both hooks read through mgr.GetAPIReader() rather than the cached client: a
+// cache lagging the API server by a moment would admit the very name conflicts
+// these checks exist to prevent, and workspaces are few enough that the extra
+// round trip costs nothing.
 func SetupWorkspaceWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr, &tenantv1alpha1.Workspace{}).
 		WithDefaulter(&WorkspaceCustomDefaulter{
@@ -56,21 +55,17 @@ func SetupWorkspaceWebhookWithManager(mgr ctrl.Manager) error {
 
 // +kubebuilder:webhook:path=/mutate-tenant-otterscale-io-v1alpha1-workspace,mutating=true,failurePolicy=fail,sideEffects=None,groups=tenant.otterscale.io,resources=workspaces,verbs=create;update,versions=v1alpha1,name=mworkspace-v1alpha1.kb.io,admissionReviewVersions=v1
 
-// WorkspaceCustomDefaulter is responsible for setting default values on the Workspace resource
-// during CREATE and UPDATE operations. It synchronizes member subjects as labels to enable
-// external API label selectors (e.g., "find all workspaces a user belongs to").
-//
-// NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
-// as it is used only for temporary operations and does not need to be deeply copied.
+// WorkspaceCustomDefaulter sets default values on CREATE and UPDATE. It mirrors
+// member subjects as labels so external APIs can select on them (e.g. "find all
+// workspaces a user belongs to").
 type WorkspaceCustomDefaulter struct {
 	// Reader looks up existing Namespaces so a generated name is not handed out
 	// on top of one. Must be uncached — see SetupWorkspaceWebhookWithManager.
 	Reader client.Reader
 }
 
-// Default implements admission.Defaulter[*tenantv1alpha1.Workspace] so a webhook will be registered for the Kind Workspace.
-// It ensures that labels with the prefix "user.otterscale.io/" mirror the current member subjects,
-// removing stale entries and preserving all other labels.
+// Default fills in a generated namespace when none was given, and makes the
+// "user.otterscale.io/" labels mirror the current member subjects.
 func (d *WorkspaceCustomDefaulter) Default(ctx context.Context, ws *tenantv1alpha1.Workspace) error {
 	log.FromContext(ctx).Info("Defaulting for Workspace", "name", ws.GetName())
 
@@ -87,16 +82,14 @@ func (d *WorkspaceCustomDefaulter) Default(ctx context.Context, ws *tenantv1alph
 }
 
 // namespaceNameAttempts bounds the search for a free generated name. The name
-// space is large enough that the first candidate almost always wins; the retry
-// only has to beat the alternative, which is a Workspace permanently stuck on a
-// namespace it may not adopt and may not rename.
+// space is large enough that the first candidate almost always wins.
 const namespaceNameAttempts = 5
 
 // generateAvailableNamespaceName returns a generated name no Namespace holds yet.
 //
-// Handing out a name blind is not merely optimistic: a collision produces a
-// Workspace that can never reconcile and can never be fixed, because
-// spec.namespace is immutable once admitted. See workspace.ValidateNamespaceAvailable.
+// A collision would produce a Workspace that can never reconcile and can never
+// be fixed, since spec.namespace is immutable once admitted. See
+// workspace.ValidateNamespaceAvailable.
 func (d *WorkspaceCustomDefaulter) generateAvailableNamespaceName(ctx context.Context) (string, error) {
 	for range namespaceNameAttempts {
 		name := generateNamespaceName()
@@ -122,21 +115,19 @@ func generateNamespaceName() string {
 	return prefix + utilrand.String(5)
 }
 
-// defaultMemberLabels synchronizes member subjects as labels on the Workspace.
-// Labels with the prefix "user.otterscale.io/" are managed; all other labels are preserved.
+// defaultMemberLabels mirrors member subjects as "user.otterscale.io/" labels.
+// Labels outside that prefix are preserved untouched.
 func defaultMemberLabels(ws *tenantv1alpha1.Workspace) {
 	labels := ws.GetLabels()
 	if labels == nil {
 		labels = make(map[string]string)
 	}
 
-	// Build desired user labels from spec
 	desired := make(map[string]struct{}, len(ws.Spec.Members))
 	for _, m := range ws.Spec.Members {
 		desired[workspace.UserLabelPrefix+m.Subject] = struct{}{}
 	}
 
-	// Remove stale user labels
 	for k := range labels {
 		if strings.HasPrefix(k, workspace.UserLabelPrefix) {
 			if _, ok := desired[k]; !ok {
@@ -145,7 +136,6 @@ func defaultMemberLabels(ws *tenantv1alpha1.Workspace) {
 		}
 	}
 
-	// Set desired user labels
 	for k := range desired {
 		labels[k] = "true"
 	}
@@ -155,13 +145,11 @@ func defaultMemberLabels(ws *tenantv1alpha1.Workspace) {
 
 // +kubebuilder:webhook:path=/validate-tenant-otterscale-io-v1alpha1-workspace,mutating=false,failurePolicy=fail,sideEffects=None,groups=tenant.otterscale.io,resources=workspaces,verbs=create;update;delete,versions=v1alpha1,name=vworkspace-v1alpha1.kb.io,admissionReviewVersions=v1
 
-// WorkspaceCustomValidator enforces workspace-level authorization on all
-// mutating operations. Create requests require the caller to list themselves
-// as an admin member. Update and delete requests require workspace-admin
-// (or cluster-level privileged) identity.
+// WorkspaceCustomValidator enforces workspace-level authorization on mutating
+// operations: create requires the caller to list themselves as an admin member,
+// update and delete require workspace-admin or cluster-privileged identity.
 //
-// The authorization logic itself is kept in internal/workspace/ for
-// testability; this validator is intentionally thin.
+// The authorization logic itself lives in internal/workspace/ for testability.
 type WorkspaceCustomValidator struct {
 	// Reader looks up existing Workspaces and Namespaces to check that the
 	// target namespace can still be claimed. Must be uncached — see
@@ -173,9 +161,8 @@ type WorkspaceCustomValidator struct {
 	Client client.Client
 }
 
-// ValidateCreate ensures the requesting user is listed as an admin member
-// of the new Workspace. Privileged callers (system:masters, cluster-admin)
-// bypass the check.
+// ValidateCreate ensures the requesting user is listed as an admin member of the
+// new Workspace. Privileged callers bypass the check.
 func (v *WorkspaceCustomValidator) ValidateCreate(ctx context.Context, ws *tenantv1alpha1.Workspace) (admission.Warnings, error) {
 	log.FromContext(ctx).Info("Validating Workspace creation", "name", ws.GetName())
 
@@ -202,8 +189,8 @@ func (v *WorkspaceCustomValidator) ValidateCreate(ctx context.Context, ws *tenan
 }
 
 // ValidateUpdate ensures only workspace admins (or privileged identities) can
-// modify an existing Workspace. The check uses oldObj so that a user cannot
-// grant themselves admin and approve in the same request.
+// modify an existing Workspace. It checks the old object, so a user cannot grant
+// themselves admin and approve it in the same request.
 func (v *WorkspaceCustomValidator) ValidateUpdate(ctx context.Context, oldWorkspace, newWorkspace *tenantv1alpha1.Workspace) (admission.Warnings, error) {
 	log.FromContext(ctx).Info("Validating Workspace update", "name", newWorkspace.GetName())
 

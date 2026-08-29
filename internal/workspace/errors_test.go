@@ -38,15 +38,14 @@ import (
 	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
 )
 
-// The controller puts err.Error() verbatim into the Workspace's Ready condition
-// and its Warning event, so an unwrapped client error reaches the user as a bare
-// "Operation cannot be fulfilled on resourcequotas ..." with nothing saying which
-// of the nine sync steps produced it. These tests fail any Reconcile* that hands
-// a client error back without naming the resource it was working on.
+// The controller puts err.Error() verbatim into the Ready condition and the
+// Warning event, so an unwrapped client error reaches the user as a bare
+// "Operation cannot be fulfilled on resourcequotas ..." with nothing saying
+// which sync step produced it. These tests fail any Reconcile* that hands a
+// client error back without naming the resource it was working on.
 
-// errWrite is what every write in these tests fails with. It carries a Conflict
-// status so the tests also prove the wrapping stays transparent to the
-// controller's apierrors.IsConflict classification.
+// errWrite is what every write in these tests fails with. Its Conflict status
+// also proves the wrapping stays transparent to apierrors.IsConflict.
 var errWrite = apierrors.NewConflict(
 	schema.GroupResource{Resource: "test"}, "test", errors.New("synthetic write failure"))
 
@@ -230,8 +229,7 @@ func TestReconcileErrorsNameTheirResource(t *testing.T) {
 			if !strings.Contains(err.Error(), tt.want) {
 				t.Errorf("error = %q, want it to contain %q", err, tt.want)
 			}
-			// The wrapping has to stay transparent: the controller classifies
-			// conflicts and permanent errors by unwrapping what it is handed.
+			// The controller classifies errors by unwrapping what it is handed.
 			if !apierrors.IsConflict(err) {
 				t.Errorf("error = %q, want it to still unwrap to the underlying Conflict", err)
 			}
@@ -239,9 +237,9 @@ func TestReconcileErrorsNameTheirResource(t *testing.T) {
 	}
 }
 
-// A namespace owned by someone else makes ReconcileNamespace return
-// NamespaceConflictError from inside the mutate function, and the controller
-// only treats it as permanent if errors.As can still find it through the wrap.
+// ReconcileNamespace returns NamespaceConflictError from inside its mutate
+// function, and the controller only treats it as permanent if errors.As can
+// still find it through the wrap.
 func TestReconcileNamespaceConflictSurvivesWrapping(t *testing.T) {
 	t.Parallel()
 
@@ -250,9 +248,9 @@ func TestReconcileNamespaceConflictSurvivesWrapping(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            w.Spec.Namespace,
 			OwnerReferences: []metav1.OwnerReference{{UID: "somebody-else"}},
-			// The guard keys off a non-zero CreationTimestamp to tell an
-			// existing namespace from the empty object CreateOrUpdate builds
-			// before a create, and the fake client does not set one.
+			// The guard keys off a non-zero CreationTimestamp to tell an existing
+			// namespace from the empty object CreateOrUpdate builds before a
+			// create, and the fake client does not set one.
 			CreationTimestamp: metav1.Now(),
 		},
 	}

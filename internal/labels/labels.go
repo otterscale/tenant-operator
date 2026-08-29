@@ -14,8 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package labels provides shared Kubernetes recommended label constants and
-// builder functions for all operator-managed resources.
+// Package labels provides the Kubernetes recommended label constants and
+// builders shared by all operator-managed resources.
 //
 // See: https://kubernetes.io/docs/concepts/overview/working-with-objects/common-labels/
 package labels
@@ -43,12 +43,11 @@ const (
 	Operator = "tenant-operator"
 )
 
-// Standard returns the base set of Kubernetes recommended labels for all
-// operator-managed resources. Domain-specific labels (e.g. workspace-specific)
-// should be added by the caller after invoking this function.
+// Standard returns the base Kubernetes recommended labels for operator-managed
+// resources; callers add their own domain-specific labels on top.
 //
-// If version is empty, the app.kubernetes.io/version label is omitted, as an
-// empty version label carries no semantic meaning per K8s conventions.
+// An empty version omits the app.kubernetes.io/version label, which carries no
+// meaning when blank.
 func Standard(name, component, version string) map[string]string {
 	m := map[string]string{
 		Name:      name,

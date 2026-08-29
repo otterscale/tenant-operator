@@ -24,9 +24,8 @@ import (
 )
 
 const (
-	// OperatorNamespace is where the operator runs, and therefore where it looks
-	// for the operator-wide inputs every workspace derives from: the
-	// tenant-operator-config ConfigMap and the tenant-operator-secret Secret.
+	// OperatorNamespace is where the operator runs, and where it looks for the
+	// operator-wide tenant-operator-config ConfigMap and tenant-operator-secret.
 	OperatorNamespace = "otterscale-system"
 
 	RoleBindingName          = "workspace-role-binding"
@@ -47,17 +46,17 @@ const (
 	// constants for subject kinds but not for this one.
 	clusterRoleKind = "ClusterRole"
 
-	// ConditionTypeReady is the condition type that indicates whether all
-	// workspace resources have been successfully reconciled.
+	// ConditionTypeReady reports whether all workspace resources reconciled.
 	ConditionTypeReady = "Ready"
 )
 
-// LabelsForWorkspace returns a standard set of labels for resources managed by this operator.
+// LabelsForWorkspace returns the standard labels for operator-managed resources.
 func LabelsForWorkspace(workspace, version string) map[string]string {
 	return labels.Standard(workspace, "workspace", version)
 }
 
-// IsOwned checks if the object is owned by the given UID to prevent adoption conflicts.
+// IsOwned reports whether the given UID appears in refs, guarding against
+// adopting resources that belong to someone else.
 func IsOwned(refs []metav1.OwnerReference, uid types.UID) bool {
 	for _, ref := range refs {
 		if ref.UID == uid {

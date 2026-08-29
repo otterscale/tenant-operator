@@ -39,9 +39,8 @@ import (
 const (
 	// OperatorConfigName is the operator-wide ConfigMap, in OperatorNamespace,
 	// holding settings that cannot be discovered from the cluster (see
-	// RancherProjectIDKey). Everything the operator publishes to workspaces is
-	// derived from the cluster itself, so this ConfigMap is not copied into any
-	// workspace. Unlike the Harbor credentials Secret it is optional.
+	// RancherProjectIDKey). It is never copied into a workspace, and unlike the
+	// Harbor credentials Secret it is optional.
 	OperatorConfigName = "tenant-operator-config"
 
 	// PlatformGatewayNamespace and PlatformGatewayName locate the Gateway whose
@@ -56,9 +55,8 @@ const (
 )
 
 // modelGatewayProtocols are the listener protocols the model endpoint is derived
-// from, in preference order, each paired with the URL scheme it implies. The
-// protocol is authoritative: listener names are free-form and say nothing about
-// how a client must connect.
+// from, in preference order, each with the URL scheme it implies. The protocol
+// is authoritative: listener names are free-form.
 var modelGatewayProtocols = []struct {
 	protocol gatewayv1.ProtocolType
 	scheme   string
@@ -75,11 +73,10 @@ var errGatewayAddressUnusable = errors.New("platform gateway does not declare ex
 // ReconcileConfig ensures the workspace-config ConfigMap matches the endpoints
 // currently derivable from the cluster's Gateways.
 //
-// A Gateway that is absent or not yet configured is not an error: the affected
-// entry is left out so that other workspace resources are not blocked, and the
-// ConfigMap is removed entirely once no endpoint resolves at all. Only genuine
-// API failures are returned, so a transient error retries instead of rewriting
-// the ConfigMap with a partial view.
+// A Gateway that is absent or unconfigured is not an error: its entry is left
+// out so other workspace resources are not blocked, and the ConfigMap is removed
+// once nothing resolves at all. Only genuine API failures are returned, so a
+// transient error retries instead of writing a partial view.
 func ReconcileConfig(ctx context.Context, c client.Client, scheme *runtime.Scheme, w *tenantv1alpha1.Workspace, version string) error {
 	logger := log.FromContext(ctx)
 
@@ -152,9 +149,9 @@ func deleteConfig(ctx context.Context, c client.Client, w *tenantv1alpha1.Worksp
 	return nil
 }
 
-// operatorConfigData returns the data of the operator-wide tenant-operator-config
-// ConfigMap. A missing ConfigMap is not an error: it returns a nil map so callers
-// can treat "not configured" and "configured with nothing" identically.
+// operatorConfigData returns the data of the tenant-operator-config ConfigMap.
+// A missing ConfigMap yields a nil map, so callers treat "not configured" and
+// "configured with nothing" identically.
 func operatorConfigData(ctx context.Context, c client.Client) (map[string]string, error) {
 	var cm corev1.ConfigMap
 	key := types.NamespacedName{Name: OperatorConfigName, Namespace: OperatorNamespace}
@@ -167,8 +164,7 @@ func operatorConfigData(ctx context.Context, c client.Client) (map[string]string
 	return cm.Data, nil
 }
 
-// IsOperatorConfig reports whether obj is the operator-wide ConfigMap holding
-// the settings the operator cannot discover from the cluster.
+// IsOperatorConfig reports whether obj is the operator-wide ConfigMap.
 func IsOperatorConfig(obj client.Object) bool {
 	if obj == nil {
 		return false
@@ -193,10 +189,9 @@ func IsEndpointSourceGateway(obj client.Object) bool {
 	return false
 }
 
-// resolveExternalAddress returns the address clients outside the cluster use to
-// reach the platform gateway, taken from its spec.addresses. A supported
-// deployment declares exactly one, so anything else is reported as an error
-// rather than guessed at.
+// resolveExternalAddress returns the address clients outside the cluster reach
+// the platform gateway at, from its spec.addresses. A supported deployment
+// declares exactly one; anything else is an error rather than a guess.
 func resolveExternalAddress(ctx context.Context, c client.Client) (string, error) {
 	var gateway gatewayv1.Gateway
 	key := types.NamespacedName{Name: PlatformGatewayName, Namespace: PlatformGatewayNamespace}
@@ -222,15 +217,14 @@ func resolveExternalAddress(ctx context.Context, c client.Client) (string, error
 	}
 }
 
-// resolveModelGatewayEndpoint returns the URL clients should use to reach the
-// KServe model gateway. HTTPS listeners win over HTTP ones, and within a
-// protocol a listener hostname wins over the platform gateway address.
+// resolveModelGatewayEndpoint returns the URL clients reach the KServe model
+// gateway at. HTTPS wins over HTTP, and within a protocol a listener hostname
+// wins over the platform gateway address.
 //
-// A hostname yields a scheme-qualified host with the port left implicit
-// ("https://models.example.com"): a hostname is set up together with DNS and a
-// certificate on the protocol's standard port. Without a hostname the platform
-// gateway address stands in and the port is spelled out, because connecting by
-// address bypasses that setup ("https://10.0.0.1:443").
+// A hostname leaves the port implicit ("https://models.example.com") — it comes
+// with DNS and a certificate on the protocol's standard port. The fallback
+// address spells the port out ("https://10.0.0.1:443"), since connecting by
+// address bypasses that setup.
 //
 // Returns an empty string when the Gateway serves neither protocol, or when no
 // listener has a hostname and externalAddress is empty.
@@ -242,8 +236,8 @@ func resolveModelGatewayEndpoint(ctx context.Context, c client.Client, externalA
 	}
 
 	for _, preferred := range modelGatewayProtocols {
-		// Several listeners may share a protocol, differing by hostname or port.
-		// A hostname on any of them beats falling back to the raw address.
+		// Several listeners may share a protocol; a hostname on any of them beats
+		// falling back to the raw address.
 		var fallbackPort gatewayv1.PortNumber
 		var served bool
 		for _, listener := range gateway.Spec.Listeners {

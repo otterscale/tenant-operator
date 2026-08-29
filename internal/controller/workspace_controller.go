@@ -56,25 +56,20 @@ import (
 )
 
 // WorkspaceReconciler reconciles a Workspace object.
-// It ensures that the underlying Namespace, RBAC roles, ResourceQuotas, and NetworkPolicies
-// match the desired state defined in the Workspace CR.
 //
-// The controller is intentionally kept thin: it orchestrates the reconciliation flow,
-// while the actual resource synchronization logic resides in internal/workspace/.
+// The controller is intentionally thin: it orchestrates the reconciliation flow,
+// while the resource synchronization logic lives in internal/workspace/.
 type WorkspaceReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Version  string
 	Recorder events.EventRecorder
 
-	// NewHarborClient builds the Harbor API client from the credentials found in
-	// the operator-wide Secret. Defaults to harbor.NewClient when unset; tests
-	// substitute a fake so reconciliation can run without a Harbor server.
+	// NewHarborClient defaults to harbor.NewClient when unset; tests substitute a
+	// fake so reconciliation can run without a Harbor server.
 	NewHarborClient func(baseURL, username, password string) harbor.Client
 }
 
-// harborClient builds the Harbor API client for the given credentials, falling
-// back to the real HTTP client when no factory was injected.
 func (r *WorkspaceReconciler) harborClient(creds *workspace.HarborCredentials) harbor.Client {
 	newClient := r.NewHarborClient
 	if newClient == nil {
@@ -83,7 +78,6 @@ func (r *WorkspaceReconciler) harborClient(creds *workspace.HarborCredentials) h
 	return newClient(creds.URL, creds.RobotName, creds.RobotSecret)
 }
 
-// RBAC Permissions required by the controller:
 // +kubebuilder:rbac:groups=tenant.otterscale.io,resources=workspaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=tenant.otterscale.io,resources=workspaces/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
@@ -91,8 +85,8 @@ func (r *WorkspaceReconciler) harborClient(creds *workspace.HarborCredentials) h
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=bind,resourceNames=admin;edit;view
-// The admission webhook asks the cluster authorizer whether a caller holds
-// cluster-wide access, instead of reading cluster-wide RBAC itself:
+// The webhook asks the cluster authorizer about cluster-wide access instead of
+// reading cluster-wide RBAC itself:
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch
@@ -102,45 +96,37 @@ func (r *WorkspaceReconciler) harborClient(creds *workspace.HarborCredentials) h
 // +kubebuilder:rbac:groups=source.toolkit.fluxcd.io,resources=helmrepositories,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 
-// missingHarborMembersRequeue is how long to wait before retrying when Harbor
-// members are missing. Harbor provisions users on first OIDC login, so the
-// retry window just needs to be short enough to pick them up promptly.
+// missingHarborMembersRequeue bounds how long a member waits to be added after
+// Harbor provisions their user on first OIDC login.
 const missingHarborMembersRequeue = 5 * time.Minute
 
-// Reconcile is the main loop for the controller.
-// It implements the level-triggered reconciliation logic with a thin orchestration pattern:
-// Fetch -> Domain Sync -> Status Update.
+// Reconcile runs the level-triggered flow: Fetch -> Domain Sync -> Status Update.
 //
-// Member-to-label synchronization is handled by the Mutating Webhook (WorkspaceCustomDefaulter),
-// ensuring labels are always consistent before the object reaches etcd.
+// Member-to-label synchronization is handled by the mutating webhook
+// (WorkspaceCustomDefaulter), so labels are consistent before the object reaches etcd.
 //
-// Deletion is handled entirely by Kubernetes garbage collection: all child resources
-// are created with OwnerReferences pointing to the Workspace, so they are automatically
-// cascade-deleted when the Workspace is removed. No finalizer is needed.
+// Deletion needs no finalizer: every child resource carries an OwnerReference to
+// the Workspace, so Kubernetes garbage collection cascades.
 func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithName(req.Name)
 	ctx = log.IntoContext(ctx, logger)
 
-	// 1. Fetch the Workspace instance
 	var w tenantv1alpha1.Workspace
 	if err := r.Get(ctx, req.NamespacedName, &w); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// 2. Reconcile all domain resources
 	missingHarborMembers, err := r.reconcileResources(ctx, &w)
 	if err != nil {
 		return r.handleReconcileError(ctx, &w, err)
 	}
 
-	// 3. Update Status (Reflect the observed state back to the user)
 	if err := r.updateStatus(ctx, &w, missingHarborMembers); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// 4. Requeue if some Harbor users haven't been provisioned yet so they get
-	//    added once Harbor has them. There's no watch on Harbor users, so a
-	//    timed requeue is the only way these get picked up without a spec change.
+	// There is no watch on Harbor users, so a timed requeue is the only way
+	// pending members get picked up without a spec change.
 	if len(missingHarborMembers) > 0 {
 		return ctrl.Result{RequeueAfter: missingHarborMembersRequeue}, nil
 	}
@@ -149,14 +135,13 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 }
 
 // reconcileResources orchestrates the domain-level resource sync in order.
-// Returns the list of workspace members whose Harbor user accounts do not yet
-// exist — the caller requeues so they get added when Harbor provisions them.
+// Returns the members whose Harbor user accounts do not yet exist.
 func (r *WorkspaceReconciler) reconcileResources(ctx context.Context, w *tenantv1alpha1.Workspace) ([]string, error) {
 	if err := workspace.ReconcileNamespace(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
 		return nil, err
 	}
-	// The Harbor credentials are read here rather than at startup so rotating
-	// them takes effect on the next reconcile instead of requiring a restart.
+	// Read per reconcile rather than at startup, so rotating the credentials
+	// takes effect without a restart.
 	creds, err := workspace.OperatorHarborCredentials(ctx, r.Client)
 	if err != nil {
 		return nil, err
@@ -189,10 +174,8 @@ func (r *WorkspaceReconciler) reconcileResources(ctx context.Context, w *tenantv
 }
 
 // handleReconcileError categorizes errors and updates status accordingly.
-// Permanent errors (e.g. namespace conflict) do NOT requeue to avoid infinite loops,
-// unless the status patch itself fails — in which case a delayed requeue ensures the
-// status eventually reflects the error.
-// Transient errors are returned to the controller-runtime for exponential backoff retry.
+// Permanent errors (e.g. namespace conflict) do not requeue, unless the status
+// patch itself fails. Transient errors go back to controller-runtime for backoff.
 func (r *WorkspaceReconciler) handleReconcileError(ctx context.Context, w *tenantv1alpha1.Workspace, err error) (ctrl.Result, error) {
 	var nce *workspace.NamespaceConflictError
 	if errors.As(err, &nce) {
@@ -205,43 +188,38 @@ func (r *WorkspaceReconciler) handleReconcileError(ctx context.Context, w *tenan
 	}
 
 	// A write conflict is the API server's optimistic lock, not a workspace
-	// problem: every domain sync reads then writes, so any concurrent write to a
-	// managed resource lands here. The fan-out watches make that routine, so it
-	// is handed straight back for the rate-limited retry (which starts at 5ms —
-	// exactly the re-read a conflict asks for) without touching the status or
-	// emitting an event. Reporting Ready=False and a Warning for a collision the
-	// next attempt resolves would just teach users to ignore both.
+	// problem, and the fan-out watches make it routine. Hand it straight back for
+	// the rate-limited retry without touching status or emitting an event:
+	// Ready=False for a collision the next attempt resolves teaches users to
+	// ignore both.
 	if apierrors.IsConflict(err) {
 		log.FromContext(ctx).V(1).Info("Retrying after a conflicting write", "error", err.Error())
 		return ctrl.Result{}, err
 	}
 
-	// Transient error: surface it on the status, then hand the original error back
-	// so controller-runtime retries with backoff. A failed status patch is
-	// deliberately dropped here — unlike the permanent case above there is
-	// already a retry coming, and reporting the patch error instead would lose
-	// the reason the reconcile actually failed.
+	// Transient: surface it on the status, then hand the original error back for
+	// backoff. A failed status patch is dropped deliberately — a retry is already
+	// coming, and reporting the patch error would lose the real failure.
 	_ = r.setReadyConditionFalse(ctx, w, "ReconcileError", err.Error())
 	r.eventf(w, corev1.EventTypeWarning, "ReconcileError", err.Error())
 	return ctrl.Result{}, err
 }
 
-// eventf records an event whose note is a message already assembled elsewhere.
+// eventf records an event whose note is already assembled.
 //
-// EventRecorder.Eventf treats note as a format string, so passing an error text
-// straight through renders any %-verb it happens to contain as %!s(MISSING) —
-// and Harbor error notes carry response bodies, where percent-encoding is
-// common. The message goes through a %s placeholder instead.
+// EventRecorder.Eventf treats note as a format string, so an error text passed
+// straight through would render its %-verbs as %!s(MISSING) — and Harbor error
+// notes carry percent-encoded response bodies. Hence the %s placeholder.
 func (r *WorkspaceReconciler) eventf(w *tenantv1alpha1.Workspace, eventType, reason, message string) {
 	r.Recorder.Eventf(w, nil, eventType, reason, "Reconcile", "%s", message)
 }
 
-// observedRef returns a reference to name/namespace once that object is actually
-// present, so the status does not advertise a resource that is not there.
+// observedRef returns a reference to name/namespace only once that object is
+// present, so the status never advertises a resource that is not there.
 //
-// obj is only a typed container for the lookup; its contents are not used. A
-// missing object yields a nil reference, while any other API failure is returned
-// so the caller retries instead of clearing the reference on a transient error.
+// obj is only a typed container for the lookup. A missing object yields a nil
+// reference; any other API failure is returned so the caller retries rather than
+// clearing the reference on a transient error.
 func (r *WorkspaceReconciler) observedRef(
 	ctx context.Context,
 	obj client.Object,
@@ -256,8 +234,8 @@ func (r *WorkspaceReconciler) observedRef(
 	return &tenantv1alpha1.ResourceReference{Name: name, Namespace: namespace}, nil
 }
 
-// setReadyConditionFalse updates the Ready condition to False via status patch.
-// Returns the patch error so callers can decide whether to retry.
+// setReadyConditionFalse patches the Ready condition to False, returning the
+// patch error so callers can decide whether to retry.
 func (r *WorkspaceReconciler) setReadyConditionFalse(ctx context.Context, w *tenantv1alpha1.Workspace, reason, message string) error {
 	patch := client.MergeFrom(w.DeepCopy())
 	meta.SetStatusCondition(&w.Status.Conditions, metav1.Condition{
@@ -283,9 +261,9 @@ type requiredKind struct {
 	gvk      schema.GroupVersionKind
 }
 
-// requiredKinds lists those kinds. Every workspace is given a HelmRepository and
-// its service endpoints are derived from Gateways, so a cluster missing either
-// API cannot serve a single workspace.
+// requiredKinds lists those kinds. Every workspace gets a HelmRepository and
+// derives its endpoints from Gateways, so a cluster missing either API cannot
+// serve a single workspace.
 func requiredKinds() []requiredKind {
 	return []requiredKind{
 		{
@@ -306,9 +284,8 @@ func requiredKinds() []requiredKind {
 // SetupWithManager registers the controller with the Manager and defines watches.
 func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Checked before the builder so the operator names the missing prerequisite
-	// itself. A watch on a kind the cluster does not serve would otherwise fail
-	// while its informer starts, reporting an unknown kind without saying it is
-	// required, and taking the whole manager — webhooks included — down with it.
+	// itself. Otherwise the watch fails once its informer starts, reporting an
+	// unknown kind and taking the whole manager — webhooks included — down.
 	for _, required := range requiredKinds() {
 		if !kindServed(mgr, required.gvk) {
 			return fmt.Errorf("%s is not served by the cluster: the %s CRDs are required by the tenant operator",
@@ -348,24 +325,21 @@ func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // kindServed reports whether the cluster serves the given kind. The RESTMapper
-// is cached, so this is a startup-time decision: installing a CRD afterwards
-// requires an operator restart before the kind is seen.
+// is cached, so installing a CRD afterwards requires an operator restart.
 func kindServed(mgr ctrl.Manager, gvk schema.GroupVersionKind) bool {
 	_, err := mgr.GetRESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version)
 	return err == nil
 }
 
-// Every operator-wide input the workspaces derive from — the two Gateways, the
-// tenant-operator-config ConfigMap and the tenant-operator-secret Secret — is
-// watched the same way: narrow the event stream to the one object the operator
-// reads, then fan a real change out across every Workspace. The two helpers
-// below express that shape once; each input only supplies its own matcher and
-// its own notion of "the part I actually read changed".
+// Every operator-wide input — the two Gateways, the tenant-operator-config
+// ConfigMap and the tenant-operator-secret Secret — is watched the same way:
+// narrow the event stream to the one object the operator reads, then fan a real
+// change out across every Workspace. The two helpers below express that shape
+// once; each input supplies only its matcher and its notion of "changed".
 
 // enqueueAllWorkspacesIf maps an event on an operator-wide input to a reconcile
-// of every Workspace, since one change affects them all alike. Events on objects
-// the operator does not read are dropped, so a stray ConfigMap or Secret never
-// fans out.
+// of every Workspace. Objects the operator does not read are dropped, so a stray
+// ConfigMap or Secret never fans out.
 func (r *WorkspaceReconciler) enqueueAllWorkspacesIf(matches func(client.Object) bool) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		if !matches(obj) {
@@ -376,9 +350,8 @@ func (r *WorkspaceReconciler) enqueueAllWorkspacesIf(matches func(client.Object)
 }
 
 // operatorInputPredicate builds the event filter for one operator-wide input.
-// changed decides whether an update touched the part of the object reconcile
-// consumes, so metadata churn does not fan out across every Workspace. Creates
-// and deletes always pass: either can change what reconcile resolves.
+// changed decides whether an update touched the part reconcile consumes, so
+// metadata churn does not fan out. Creates and deletes always pass.
 func operatorInputPredicate[T client.Object](
 	matches func(client.Object) bool,
 	changed func(oldObj, newObj T) bool,
@@ -407,9 +380,8 @@ func operatorInputPredicate[T client.Object](
 	}
 }
 
-// gatewayChangedPredicate narrows Gateway events to the Gateways the workspace
-// endpoints are derived from, and updates to the two fields those endpoints
-// read: spec.addresses and spec.listeners.
+// gatewayChangedPredicate narrows Gateway events to the endpoint source
+// Gateways, and updates to the two fields those endpoints read.
 func gatewayChangedPredicate() predicate.Funcs {
 	return operatorInputPredicate(workspace.IsEndpointSourceGateway,
 		func(oldGateway, newGateway *gatewayv1.Gateway) bool {
@@ -418,8 +390,8 @@ func gatewayChangedPredicate() predicate.Funcs {
 		})
 }
 
-// operatorConfigChangedPredicate narrows ConfigMap events to the
-// tenant-operator-config ConfigMap, and updates to changes of its data.
+// operatorConfigChangedPredicate narrows ConfigMap events to
+// tenant-operator-config, and updates to changes of its data.
 func operatorConfigChangedPredicate() predicate.Funcs {
 	return operatorInputPredicate(workspace.IsOperatorConfig,
 		func(oldConfig, newConfig *corev1.ConfigMap) bool {
@@ -436,8 +408,8 @@ func operatorSecretChangedPredicate() predicate.Funcs {
 		})
 }
 
-// allWorkspaceRequests enqueues every Workspace. Used by watches on
-// operator-wide inputs, where a single change affects all workspaces alike.
+// allWorkspaceRequests enqueues every Workspace, for watches on operator-wide
+// inputs where a single change affects all workspaces alike.
 func (r *WorkspaceReconciler) allWorkspaceRequests(ctx context.Context) []reconcile.Request {
 	var wsList tenantv1alpha1.WorkspaceList
 	if err := r.List(ctx, &wsList); err != nil {
@@ -455,19 +427,18 @@ func (r *WorkspaceReconciler) allWorkspaceRequests(ctx context.Context) []reconc
 	return requests
 }
 
-// updateStatus calculates the status based on the current observed state and patches the resource.
-// When missingHarborMembers is non-empty, Ready is set to False with reason
-// HarborMembersPending so the Workspace surfaces the partial state to users.
+// updateStatus computes the status from the observed state and patches it.
+// A non-empty missingHarborMembers sets Ready=False with reason
+// HarborMembersPending so the partial state is visible to users.
 func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha1.Workspace, missingHarborMembers []string) error {
 	newStatus := w.Status.DeepCopy()
 	newStatus.ObservedGeneration = w.Generation
 
-	// Update Namespace reference
 	newStatus.NamespaceRef = &tenantv1alpha1.ResourceReference{
 		Name: w.Spec.Namespace,
 	}
 
-	// Update RoleBindings references (deterministic order to prevent status flapping)
+	// Deterministic order, to prevent status flapping.
 	rolesInUse := make(map[tenantv1alpha1.MemberRole]bool)
 	for _, m := range w.Spec.Members {
 		rolesInUse[m.Role] = true
@@ -483,7 +454,6 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 		}
 	}
 
-	// Update ResourceQuota reference
 	if w.Spec.ResourceQuota != nil {
 		newStatus.ResourceQuotaRef = &tenantv1alpha1.ResourceReference{
 			Name:      workspace.ResourceQuotaName,
@@ -493,7 +463,6 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 		newStatus.ResourceQuotaRef = nil
 	}
 
-	// Update LimitRange reference
 	if w.Spec.LimitRange != nil {
 		newStatus.LimitRangeRef = &tenantv1alpha1.ResourceReference{
 			Name:      workspace.LimitRangeName,
@@ -503,8 +472,8 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 		newStatus.LimitRangeRef = nil
 	}
 
-	// References to resources whose presence reconcile cannot guarantee from the
-	// spec alone are observed rather than derived:
+	// Resources whose presence reconcile cannot guarantee from the spec alone are
+	// observed rather than derived:
 	//   - the workspace-config ConfigMap exists only while an endpoint resolves
 	//   - the image pull Secret is written when the Harbor robot is created, so a
 	//     Secret deleted afterwards cannot be rebuilt without new credentials
@@ -526,7 +495,6 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 		return err
 	}
 
-	// Update NetworkPolicy reference
 	if w.Spec.NetworkIsolation.Enabled {
 		newStatus.NetworkPolicyRef = &tenantv1alpha1.ResourceReference{
 			Name:      workspace.NetworkPolicyName,
@@ -536,8 +504,6 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 		newStatus.NetworkPolicyRef = nil
 	}
 
-	// Set Ready condition. If some Harbor members are missing, report the
-	// partial state so users can see why those identities aren't in Harbor yet.
 	readyCondition := metav1.Condition{
 		Type:               workspace.ConditionTypeReady,
 		Status:             metav1.ConditionTrue,
@@ -555,12 +521,12 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 	}
 	meta.SetStatusCondition(&newStatus.Conditions, readyCondition)
 
-	// Sort conditions by type for stable ordering
+	// Stable ordering.
 	slices.SortFunc(newStatus.Conditions, func(a, b metav1.Condition) int {
 		return cmp.Compare(a.Type, b.Type)
 	})
 
-	// Check for changes before making an API call to reduce load on the API server
+	// Only patch on a real change, to spare the API server.
 	if !equality.Semantic.DeepEqual(w.Status, *newStatus) {
 		patch := client.MergeFrom(w.DeepCopy())
 		w.Status = *newStatus

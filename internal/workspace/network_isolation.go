@@ -31,9 +31,8 @@ import (
 )
 
 // ReconcileNetworkIsolation ensures the NetworkPolicy matches the desired state.
-// When isolation is enabled, a deny-all ingress policy is created with explicit
-// allow rules for same-namespace traffic and any configured AllowedNamespaces.
-// When disabled, the NetworkPolicy is removed.
+// Enabled, it denies ingress except from the workspace's own namespace and any
+// configured AllowedNamespaces; disabled, the NetworkPolicy is removed.
 func ReconcileNetworkIsolation(ctx context.Context, c client.Client, scheme *runtime.Scheme, w *tenantv1alpha1.Workspace, version string) error {
 	policy := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
