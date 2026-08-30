@@ -28,6 +28,10 @@ const (
 	// operator-wide tenant-operator-config ConfigMap and tenant-operator-secret.
 	OperatorNamespace = "otterscale-system"
 
+	// ServiceAccountName is also the name of its RoleBinding, and is the value
+	// cluster admission requires in a tenant HelmRelease.
+	ServiceAccountName = "workspace-deployer"
+
 	RoleBindingName          = "workspace-role-binding"
 	ResourceQuotaName        = "workspace-resource-quota"
 	LimitRangeName           = "workspace-limit-range"
