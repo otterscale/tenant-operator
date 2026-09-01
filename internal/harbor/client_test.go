@@ -316,18 +316,18 @@ func TestReconcileProjectMembers_SkipsMissingUser(t *testing.T) {
 // robotTestHandler serves project lookup and robot API requests, with
 // robotResponse standing in for what the robot list endpoint returns.
 func robotTestHandler(t *testing.T, robotResponse []byte, postHandler http.HandlerFunc) http.HandlerFunc {
-	return robotTestHandlerWithPatch(t, robotResponse, postHandler, nil)
+	return robotTestHandlerWithDelete(t, robotResponse, postHandler, nil)
 }
 
-// robotTestHandlerWithPatch additionally serves the per-robot PATCH that
-// refreshes a secret.
-func robotTestHandlerWithPatch(
-	t *testing.T, robotResponse []byte, postHandler, patchHandler http.HandlerFunc,
+// robotTestHandlerWithDelete additionally serves the per-robot DELETE that a
+// secret refresh goes through.
+func robotTestHandlerWithDelete(
+	t *testing.T, robotResponse []byte, postHandler, deleteHandler http.HandlerFunc,
 ) http.HandlerFunc {
 	t.Helper()
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, robotsPath+"/") && patchHandler != nil {
-			patchHandler(w, r)
+		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, robotsPath+"/") && deleteHandler != nil {
+			deleteHandler(w, r)
 			return
 		}
 		if r.Method == http.MethodGet && r.URL.Path == projectsPath+"/test-ns" {
@@ -451,14 +451,21 @@ func existingRobotList(t *testing.T) []byte {
 	return body
 }
 
+// A refresh is a delete followed by a create, because Harbor has no
+// robot:update permission for a robot account to use.
 func TestRefreshRobotSecret_ReturnsNewCredentials(t *testing.T) {
-	var patchedPath string
-	patchHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		patchedPath = r.URL.Path
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"secret": "brand-new-secret"})
+	var deletedPath string
+	deleteHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		deletedPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
 	})
-	srv := httptest.NewServer(robotTestHandlerWithPatch(t, existingRobotList(t), nil, patchHandler))
+	postHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"name": "robot$test-ns+workspace-test-ns", "secret": "brand-new-secret",
+		})
+	})
+	srv := httptest.NewServer(robotTestHandlerWithDelete(t, existingRobotList(t), postHandler, deleteHandler))
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "admin", "password")
@@ -468,21 +475,19 @@ func TestRefreshRobotSecret_ReturnsNewCredentials(t *testing.T) {
 	}
 
 	// The robot is addressed by the id found in the list, not by its name.
-	if want := robotsPath + "/42"; patchedPath != want {
-		t.Errorf("patched %s, want %s", patchedPath, want)
+	if want := robotsPath + "/42"; deletedPath != want {
+		t.Errorf("deleted %s, want %s", deletedPath, want)
 	}
 	if creds.Secret != "brand-new-secret" {
 		t.Errorf("Secret = %q, want brand-new-secret", creds.Secret)
 	}
-	// The refresh response carries only the secret, so the name comes from the
-	// robot Harbor matched.
 	if creds.Name != "robot$test-ns+workspace-test-ns" {
 		t.Errorf("Name = %q, want robot$test-ns+workspace-test-ns", creds.Name)
 	}
 }
 
 func TestRefreshRobotSecret_MissingRobotIsAnError(t *testing.T) {
-	srv := httptest.NewServer(robotTestHandlerWithPatch(t, []byte("[]"), nil, nil))
+	srv := httptest.NewServer(robotTestHandlerWithDelete(t, []byte("[]"), nil, nil))
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "admin", "password")
@@ -495,14 +500,34 @@ func TestRefreshRobotSecret_MissingRobotIsAnError(t *testing.T) {
 	}
 }
 
+// The delete has to succeed before the create is attempted, or the old secret
+// would stay live alongside a second robot.
+func TestRefreshRobotSecret_DeleteFailureIsAnError(t *testing.T) {
+	deleteHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("internal error"))
+	})
+	srv := httptest.NewServer(robotTestHandlerWithDelete(t, existingRobotList(t), nil, deleteHandler))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "admin", "password")
+	_, err := c.RefreshRobotSecret(context.Background(), "test-ns", "workspace-test-ns")
+	if err == nil {
+		t.Fatal("RefreshRobotSecret should return error when the delete fails")
+	}
+}
+
 // An empty secret would reach the image pull Secret and fail every pull with an
 // authentication error far from here, so it is rejected at source.
 func TestRefreshRobotSecret_EmptySecretIsAnError(t *testing.T) {
-	patchHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"secret": ""})
+	deleteHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
 	})
-	srv := httptest.NewServer(robotTestHandlerWithPatch(t, existingRobotList(t), nil, patchHandler))
+	postHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]string{"name": "robot$x", "secret": ""})
+	})
+	srv := httptest.NewServer(robotTestHandlerWithDelete(t, existingRobotList(t), postHandler, deleteHandler))
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "admin", "password")
@@ -512,18 +537,25 @@ func TestRefreshRobotSecret_EmptySecretIsAnError(t *testing.T) {
 	}
 }
 
-func TestRefreshRobotSecret_ServerError(t *testing.T) {
-	patchHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte("internal error"))
+// Losing the race means another writer holds the only copy of the new secret,
+// so reporting success would hand back credentials that do not work.
+func TestRefreshRobotSecret_ConcurrentRecreateIsAnError(t *testing.T) {
+	deleteHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
 	})
-	srv := httptest.NewServer(robotTestHandlerWithPatch(t, existingRobotList(t), nil, patchHandler))
+	postHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+	})
+	srv := httptest.NewServer(robotTestHandlerWithDelete(t, existingRobotList(t), postHandler, deleteHandler))
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "admin", "password")
 	_, err := c.RefreshRobotSecret(context.Background(), "test-ns", "workspace-test-ns")
 	if err == nil {
-		t.Fatal("RefreshRobotSecret should return error on 500")
+		t.Fatal("a concurrent re-create should be an error")
+	}
+	if !strings.Contains(err.Error(), "concurrently") {
+		t.Errorf("error = %q, want it to mention the concurrent re-create", err)
 	}
 }
 

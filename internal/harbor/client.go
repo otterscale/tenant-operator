@@ -262,6 +262,13 @@ func (c *httpClient) EnsureRobot(ctx context.Context, projectName string, robotN
 		return nil, nil
 	}
 
+	return c.createRobot(ctx, projectName, robotName)
+}
+
+// createRobot creates the project robot and returns the secret Harbor reveals
+// once. A 409 means something else created it in the meantime, and that call
+// got the secret, so there is none to report.
+func (c *httpClient) createRobot(ctx context.Context, projectName string, robotName string) (*RobotCredentials, error) {
 	body := map[string]any{
 		"name":     robotName,
 		"duration": -1,
@@ -288,8 +295,6 @@ func (c *httpClient) EnsureRobot(ctx context.Context, projectName string, robotN
 	case http.StatusCreated:
 		// fall through to decode credentials
 	case http.StatusConflict:
-		// Created between the check and the create; its secret went to whoever won
-		// that race, so this call has none to report.
 		return nil, nil
 	default:
 		return nil, c.unexpectedStatus("creating Harbor robot account", resp)
@@ -302,6 +307,11 @@ func (c *httpClient) EnsureRobot(ctx context.Context, projectName string, robotN
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decoding Harbor robot response: %w", err)
 	}
+	// An empty secret would reach the image pull Secret and fail every pull with
+	// an authentication error far from here, so it is rejected at source.
+	if result.Secret == "" {
+		return nil, fmt.Errorf("creating Harbor robot account: Harbor returned an empty secret")
+	}
 
 	return &RobotCredentials{
 		Name:   result.Name,
@@ -309,6 +319,16 @@ func (c *httpClient) EnsureRobot(ctx context.Context, projectName string, robotN
 	}, nil
 }
 
+// RefreshRobotSecret rebuilds a robot by deleting and re-creating it.
+//
+// Harbor's RefreshSec operation would be the direct route, but it is a PATCH on
+// the robot and Harbor defines no robot:update permission at either scope — so
+// no robot account can perform it, only an administrator. Deleting and creating
+// stays within create/read/list/delete, which a scoped robot can hold.
+//
+// The cost is a window where the robot does not exist and pulls fail. It is
+// bounded by these two calls, and this path only runs when the workspace's
+// image pull Secret has gone missing, which already broke pulls.
 func (c *httpClient) RefreshRobotSecret(ctx context.Context, projectName string, robotName string) (*RobotCredentials, error) {
 	existing, err := c.findRobot(ctx, projectName, robotName)
 	if err != nil {
@@ -319,47 +339,38 @@ func (c *httpClient) RefreshRobotSecret(ctx context.Context, projectName string,
 			robotName, projectName)
 	}
 
-	secret, err := c.refreshRobotSecret(ctx, existing.ID)
-	if err != nil {
+	if err := c.deleteRobot(ctx, existing.ID); err != nil {
 		return nil, err
 	}
 
-	// The refresh response carries only the secret, so the name comes from the
-	// robot Harbor matched rather than being rebuilt from the arguments.
-	return &RobotCredentials{Name: existing.Name, Secret: secret}, nil
+	creds, err := c.createRobot(ctx, projectName, robotName)
+	if err != nil {
+		return nil, fmt.Errorf("re-creating Harbor robot after delete: %w", err)
+	}
+	if creds == nil {
+		// A 409 right after a successful delete means another writer re-created
+		// the robot and holds the only copy of its secret.
+		return nil, fmt.Errorf("refreshing Harbor robot secret: robot %q in project %q was re-created concurrently",
+			robotName, projectName)
+	}
+	return creds, nil
 }
 
-// refreshRobotSecret is Harbor's RefreshSec operation: PATCH the robot with an
-// empty RobotSec body and Harbor generates a secret and returns it, sparing us
-// its password policy.
-//
-// This is the one call written against Harbor's API reference rather than a
-// running Harbor. If a deployment's version does not serve it, only this
-// function has to change: the fallback is DELETE + re-create, at the cost of a
-// window in which the robot does not exist and pulls fail.
-func (c *httpClient) refreshRobotSecret(ctx context.Context, robotID int) (string, error) {
+// deleteRobot removes a robot by ID. A robot that is already gone is not an
+// error: the goal is that it no longer exists.
+func (c *httpClient) deleteRobot(ctx context.Context, robotID int) error {
 	path := fmt.Sprintf("%s/%d", robotsPath, robotID)
 
-	resp, err := c.doJSON(ctx, http.MethodPatch, path, map[string]any{})
+	resp, err := c.do(ctx, http.MethodDelete, path, nil)
 	if err != nil {
-		return "", fmt.Errorf("refreshing Harbor robot secret: %w", err)
+		return fmt.Errorf("deleting Harbor robot account: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode != http.StatusOK {
-		return "", c.unexpectedStatus("refreshing Harbor robot secret", resp)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
+		return c.unexpectedStatus("deleting Harbor robot account", resp)
 	}
-
-	var result struct {
-		Secret string `json:"secret"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("decoding Harbor robot secret response: %w", err)
-	}
-	if result.Secret == "" {
-		return "", fmt.Errorf("refreshing Harbor robot secret: Harbor returned an empty secret")
-	}
-	return result.Secret, nil
+	return nil
 }
 
 // projectExists checks whether a Harbor project with the given name exists.
