@@ -6,7 +6,7 @@ namespace: otterscale-system
 # "wordpress" becomes "alices-wordpress".
 # Note that it should also match with the prefix (text before '-') of the namespace
 # field above.
-namePrefix: tenant-operator-
+namePrefix: tenant-
 
 # Labels to add to all resources and selectors.
 #labels:
@@ -60,7 +60,7 @@ replacements:
 # - source: # Uncomment the following block to enable certificates for metrics
 #     kind: Service
 #     version: v1
-#     name: controller-manager-metrics-service
+#     name: operator-metrics-service
 #     fieldPath: metadata.name
 #   targets:
 #     - select:
@@ -79,7 +79,7 @@ replacements:
 #         kind: ServiceMonitor
 #         group: monitoring.coreos.com
 #         version: v1
-#         name: controller-manager-metrics-monitor
+#         name: operator-metrics-monitor
 #       fieldPaths:
 #         - spec.endpoints.0.tlsConfig.serverName
 #       options:
@@ -90,7 +90,7 @@ replacements:
 # - source:
 #     kind: Service
 #     version: v1
-#     name: controller-manager-metrics-service
+#     name: operator-metrics-service
 #     fieldPath: metadata.namespace
 #   targets:
 #     - select:
@@ -109,7 +109,7 @@ replacements:
 #         kind: ServiceMonitor
 #         group: monitoring.coreos.com
 #         version: v1
-#         name: controller-manager-metrics-monitor
+#         name: operator-metrics-monitor
 #       fieldPaths:
 #         - spec.endpoints.0.tlsConfig.serverName
 #       options:
