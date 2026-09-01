@@ -66,10 +66,7 @@ vet: ## Run go vet against code.
 verify-test-crds: controller-gen ## Verify test/crd still matches the modules pinned in go.mod.
 	@tmp="$$(mktemp -d)"; \
 	trap 'rm -rf "$$tmp"' EXIT; \
-	go mod download sigs.k8s.io/gateway-api github.com/fluxcd/source-controller/api; \
-	gateway_api="$$(go list -m -f '{{.Dir}}' sigs.k8s.io/gateway-api)"; \
-	[ -n "$$gateway_api" ] || { echo "sigs.k8s.io/gateway-api sources are not in the module cache; run 'go mod download'" >&2; exit 1; }; \
-	cp "$$gateway_api"/config/crd/standard/gateway.networking.k8s.io_gateways.yaml "$$tmp/"; \
+	go mod download github.com/fluxcd/source-controller/api; \
 	flux_api="$$(go list -m -f '{{.Dir}}' github.com/fluxcd/source-controller/api)"; \
 	[ -n "$$flux_api" ] || { echo "github.com/fluxcd/source-controller/api sources are not in the module cache; run 'go mod download'" >&2; exit 1; }; \
 	"$(CONTROLLER_GEN)" crd paths="$$flux_api/v1/..." output:crd:artifacts:config="$$tmp"; \

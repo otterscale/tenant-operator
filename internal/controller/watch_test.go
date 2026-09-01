@@ -21,77 +21,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/event"
-	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	ws "github.com/otterscale/tenant-operator/internal/workspace"
 )
-
-func endpointSourceGateway(addresses ...string) *gatewayv1.Gateway {
-	specAddresses := make([]gatewayv1.GatewaySpecAddress, 0, len(addresses))
-	for _, address := range addresses {
-		specAddresses = append(specAddresses, gatewayv1.GatewaySpecAddress{Value: address})
-	}
-	return &gatewayv1.Gateway{
-		Name:      ws.PlatformGatewayName,
-		Namespace: ws.PlatformGatewayNamespace,
-		Spec:      gatewayv1.GatewaySpec{Addresses: specAddresses},
-	}
-}
-
-func TestGatewayChangedPredicate(t *testing.T) {
-	t.Parallel()
-
-	unrelated := &gatewayv1.Gateway{
-		Name: "unrelated", Namespace: ws.PlatformGatewayNamespace,
-	}
-	p := gatewayChangedPredicate()
-
-	t.Run("create and delete", func(t *testing.T) {
-		if !p.Create(event.CreateEvent{Object: endpointSourceGateway()}) {
-			t.Error("endpoint source gateway create was filtered out")
-		}
-		if p.Create(event.CreateEvent{Object: unrelated}) {
-			t.Error("unrelated gateway create was let through")
-		}
-		if !p.Delete(event.DeleteEvent{Object: endpointSourceGateway()}) {
-			t.Error("endpoint source gateway delete was filtered out")
-		}
-	})
-
-	t.Run("update on changed addresses", func(t *testing.T) {
-		if !p.Update(event.UpdateEvent{
-			ObjectOld: endpointSourceGateway("10.0.0.1"),
-			ObjectNew: endpointSourceGateway("10.0.0.2"),
-		}) {
-			t.Error("changed spec.addresses was filtered out")
-		}
-	})
-
-	t.Run("update on changed listeners", func(t *testing.T) {
-		hostname := gatewayv1.Hostname("models.example.com")
-		updated := endpointSourceGateway("10.0.0.1")
-		updated.Spec.Listeners = []gatewayv1.Listener{{Name: "https", Hostname: &hostname}}
-		if !p.Update(event.UpdateEvent{ObjectOld: endpointSourceGateway("10.0.0.1"), ObjectNew: updated}) {
-			t.Error("changed spec.listeners was filtered out")
-		}
-	})
-
-	t.Run("update with unchanged spec", func(t *testing.T) {
-		updated := endpointSourceGateway("10.0.0.1")
-		updated.Labels = map[string]string{"unrelated": "churn"}
-		if p.Update(event.UpdateEvent{ObjectOld: endpointSourceGateway("10.0.0.1"), ObjectNew: updated}) {
-			t.Error("metadata-only update was let through")
-		}
-	})
-
-	t.Run("update on an unrelated gateway", func(t *testing.T) {
-		updated := unrelated.DeepCopy()
-		updated.Spec.Addresses = []gatewayv1.GatewaySpecAddress{{Value: "10.0.0.2"}}
-		if p.Update(event.UpdateEvent{ObjectOld: unrelated, ObjectNew: updated}) {
-			t.Error("unrelated gateway update was let through")
-		}
-	})
-}
 
 func operatorConfigMap(data map[string]string) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
@@ -105,7 +37,7 @@ func TestOperatorConfigChangedPredicate(t *testing.T) {
 	t.Parallel()
 
 	otherConfig := &corev1.ConfigMap{
-		Name: ws.ConfigName, Namespace: "workspace-a",
+		Name: "unrelated-config", Namespace: "workspace-a",
 		Data: map[string]string{ws.RancherProjectIDKey: "c-m-abcde:p-vwxyz"},
 	}
 	p := operatorConfigChangedPredicate()

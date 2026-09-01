@@ -348,21 +348,6 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              configMapRef:
-                description: ConfigMapRef is a reference to the ConfigMap managed
-                  by this Workspace.
-                properties:
-                  name:
-                    description: Name is the name of the referenced resource.
-                    type: string
-                  namespace:
-                    description: |-
-                      Namespace is the namespace of the referenced resource.
-                      Empty for cluster-scoped resources.
-                    type: string
-                required:
-                - name
-                type: object
               helmRepositoryRef:
                 description: |-
                   HelmRepositoryRef is a reference to the FluxCD HelmRepository for the

@@ -35,7 +35,6 @@ const (
 	RoleBindingName          = "workspace-role-binding"
 	ResourceQuotaName        = "workspace-resource-quota"
 	LimitRangeName           = "workspace-limit-range"
-	ConfigName               = "workspace-config"
 	NetworkPolicyName        = "workspace-network-policy"
 	ImagePullSecretName      = "workspace-image-pull-secret"
 	HelmRepositoryName       = "workspace-helm-repository"

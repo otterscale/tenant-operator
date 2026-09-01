@@ -47,7 +47,6 @@ import (
 	webhooktenantv1alpha1 "github.com/otterscale/tenant-operator/internal/webhook/v1alpha1"
 	ws "github.com/otterscale/tenant-operator/internal/workspace"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
-	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -80,18 +79,15 @@ var _ = BeforeSuite(func() {
 	err = sourcev1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
-	err = gatewayv1.Install(scheme.Scheme)
-	Expect(err).NotTo(HaveOccurred())
-
 	// +kubebuilder:scaffold:scheme
 
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths: []string{
 			filepath.Join("..", "..", "config", "crd", "bases"),
-			// Third-party CRDs the operator requires: Flux's HelmRepository and
-			// the Gateway API's Gateway. SetupWithManager refuses to start without
-			// them — see test/crd/README.md to refresh the copies.
+			// The third-party CRD the operator requires: Flux's HelmRepository.
+			// SetupWithManager refuses to start without it — see
+			// test/crd/README.md to refresh the copy.
 			filepath.Join("..", "..", "test", "crd"),
 		},
 		ErrorIfCRDPathMissing: true,
