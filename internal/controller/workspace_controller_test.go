@@ -40,7 +40,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
 	"github.com/otterscale/tenant-operator/internal/harbor"
@@ -239,58 +238,6 @@ var _ = Describe("Workspace Controller", func() {
 		})
 	})
 
-	Context("Workspace Config", func() {
-		// The Gateway API is served here but no Gateway objects exist — the
-		// graceful-degradation case: no endpoints resolve, yet the workspace must
-		// still be provisioned. Resolution itself is covered by the workspace
-		// package's unit tests.
-		It("should provision the workspace when no endpoint source Gateway exists", func() {
-			fullyReconcile()
-
-			var cm corev1.ConfigMap
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: ws.ConfigName, Namespace: namespaceName}, &cm)
-			Expect(errors.IsNotFound(err)).To(BeTrue(), "workspace-config should not be created without endpoints")
-
-			fetchResource(workspace, resourceName, "")
-			Expect(workspace.Status.ConfigMapRef).To(BeNil())
-
-			readyCond := apimeta.FindStatusCondition(workspace.Status.Conditions, "Ready")
-			Expect(readyCond).NotTo(BeNil())
-			Expect(readyCond.Status).To(Equal(metav1.ConditionTrue))
-		})
-
-		It("should remove a workspace-config left over from when endpoints resolved", func() {
-			fullyReconcile()
-
-			stale := &corev1.ConfigMap{
-				Name: ws.ConfigName, Namespace: namespaceName,
-				Data: map[string]string{"ServiceEndpoint": "http://10.0.0.1"},
-			}
-			Expect(k8sClient.Create(ctx, stale)).To(Succeed())
-
-			executeReconcile()
-
-			Eventually(func() bool {
-				err := k8sClient.Get(ctx, types.NamespacedName{Name: ws.ConfigName, Namespace: namespaceName}, stale)
-				return errors.IsNotFound(err)
-			}, timeout, interval).Should(BeTrue(), "stale workspace-config should be removed")
-		})
-
-		It("should enqueue every workspace when an endpoint source Gateway changes", func() {
-			Expect(reconciler.enqueueAllWorkspacesIf(ws.IsEndpointSourceGateway)(ctx, &gatewayv1.Gateway{
-				Name:      ws.PlatformGatewayName,
-				Namespace: ws.PlatformGatewayNamespace,
-			})).To(ContainElement(
-				reconcile.Request{Name: resourceName},
-			))
-
-			By("Ignoring Gateways the endpoints are not derived from")
-			Expect(reconciler.enqueueAllWorkspacesIf(ws.IsEndpointSourceGateway)(ctx, &gatewayv1.Gateway{
-				Name: "unrelated", Namespace: ws.PlatformGatewayNamespace,
-			})).To(BeEmpty())
-		})
-	})
-
 	Context("Watch Setup", func() {
 		It("should register all watches with the manager", func() {
 			mgr, err := ctrl.NewManager(cfg, ctrl.Options{
@@ -307,9 +254,9 @@ var _ = Describe("Workspace Controller", func() {
 			}).SetupWithManager(mgr)).To(Succeed())
 		})
 
-		// Flux and the Gateway API are prerequisites, not optional integrations, so
-		// a cluster without their CRDs must be refused at startup with a message
-		// naming the requirement — not left to fail once the informer starts.
+		// Flux is a prerequisite, not an optional integration, so a cluster
+		// without its CRDs must be refused at startup with a message naming the
+		// requirement — not left to fail once the informer starts.
 		It("should refuse to start when a required CRD is absent", func() {
 			mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 				Scheme:         k8sClient.Scheme(),
@@ -385,7 +332,7 @@ var _ = Describe("Workspace Controller", func() {
 
 			By("Ignoring ConfigMaps that are not the global config")
 			Expect(reconciler.enqueueAllWorkspacesIf(ws.IsOperatorConfig)(ctx, &corev1.ConfigMap{
-				Name: ws.ConfigName, Namespace: namespaceName,
+				Name: "unrelated-config", Namespace: namespaceName,
 			})).To(BeEmpty())
 		})
 	})

@@ -191,11 +191,6 @@ func (in *WorkspaceStatus) DeepCopyInto(out *WorkspaceStatus) {
 		*out = new(ResourceReference)
 		**out = **in
 	}
-	if in.ConfigMapRef != nil {
-		in, out := &in.ConfigMapRef, &out.ConfigMapRef
-		*out = new(ResourceReference)
-		**out = **in
-	}
 	if in.RoleBindingRefs != nil {
 		in, out := &in.RoleBindingRefs, &out.RoleBindingRefs
 		*out = make([]ResourceReference, len(*in))

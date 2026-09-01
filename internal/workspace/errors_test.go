@@ -33,7 +33,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
-	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
 )
@@ -60,7 +59,6 @@ func failWritesClient(t *testing.T, objs ...client.Object) client.Client {
 		rbacv1.AddToScheme,
 		networkingv1.AddToScheme,
 		sourcev1.AddToScheme,
-		gatewayv1.Install,
 		tenantv1alpha1.AddToScheme,
 	} {
 		if err := add(s); err != nil {
@@ -186,23 +184,6 @@ func TestReconcileErrorsNameTheirResource(t *testing.T) {
 				return ReconcileNetworkIsolation(ctx, c, scheme, w, "v0")
 			},
 			want: "deleting NetworkPolicy",
-		},
-		{
-			// A resolvable endpoint sends ReconcileConfig down its write path.
-			name: "config write",
-			seed: []client.Object{platformGateway(PlatformGatewayNamespace, "10.0.0.1")},
-			call: func(ctx context.Context, c client.Client, w *tenantv1alpha1.Workspace) error {
-				return ReconcileConfig(ctx, c, scheme, w, "v0")
-			},
-			want: "reconciling ConfigMap",
-		},
-		{
-			// No Gateway resolves, so the ConfigMap is removed instead.
-			name: "config delete",
-			call: func(ctx context.Context, c client.Client, w *tenantv1alpha1.Workspace) error {
-				return ReconcileConfig(ctx, c, scheme, w, "v0")
-			},
-			want: "deleting ConfigMap",
 		},
 		{
 			name: "helm repository",

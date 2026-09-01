@@ -47,7 +47,6 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
-	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	tenantv1alpha1 "github.com/otterscale/tenant-operator/api/v1alpha1"
 	"github.com/otterscale/tenant-operator/internal/harbor"
@@ -89,11 +88,10 @@ func (r *WorkspaceReconciler) harborClient(creds *workspace.HarborCredentials) h
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// The only ConfigMap the operator reads is its own tenant-operator-config; it
+// writes none, so no create/update/delete here:
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 // +kubebuilder:rbac:groups=source.toolkit.fluxcd.io,resources=helmrepositories,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 
 // missingHarborMembersRequeue bounds how long a member waits to be added after
 // Harbor provisions their user on first OIDC login.
@@ -164,9 +162,6 @@ func (r *WorkspaceReconciler) reconcileResources(ctx context.Context, w *tenantv
 		return nil, err
 	}
 	if err := workspace.ReconcileLimitRange(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
-		return nil, err
-	}
-	if err := workspace.ReconcileConfig(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
 		return nil, err
 	}
 	if err := workspace.ReconcileNetworkIsolation(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
@@ -262,22 +257,13 @@ type requiredKind struct {
 	gvk      schema.GroupVersionKind
 }
 
-// requiredKinds lists those kinds. Every workspace gets a HelmRepository and
-// derives its endpoints from Gateways, so a cluster missing either API cannot
-// serve a single workspace.
+// requiredKinds lists those kinds. Every workspace gets a HelmRepository, so a
+// cluster missing that API cannot serve a single workspace.
 func requiredKinds() []requiredKind {
 	return []requiredKind{
 		{
 			provider: "Flux source-controller",
 			gvk:      sourcev1.GroupVersion.WithKind("HelmRepository"),
-		},
-		{
-			provider: "Gateway API",
-			gvk: schema.GroupVersionKind{
-				Group:   gatewayv1.GroupName,
-				Version: gatewayv1.GroupVersion.Version,
-				Kind:    "Gateway",
-			},
 		},
 	}
 }
@@ -301,7 +287,6 @@ func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Namespace{}).
 		Owns(&corev1.ResourceQuota{}).
 		Owns(&corev1.LimitRange{}).
-		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Secret{}).
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&rbacv1.RoleBinding{}).
@@ -317,11 +302,6 @@ func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.enqueueAllWorkspacesIf(workspace.IsOperatorSecret)),
 			builder.WithPredicates(operatorSecretChangedPredicate()),
 		).
-		Watches(
-			&gatewayv1.Gateway{},
-			handler.EnqueueRequestsFromMapFunc(r.enqueueAllWorkspacesIf(workspace.IsEndpointSourceGateway)),
-			builder.WithPredicates(gatewayChangedPredicate()),
-		).
 		Named("workspace").
 		Complete(r)
 }
@@ -333,11 +313,11 @@ func kindServed(mgr ctrl.Manager, gvk schema.GroupVersionKind) bool {
 	return err == nil
 }
 
-// Every operator-wide input — the two Gateways, the tenant-operator-config
-// ConfigMap and the tenant-operator-secret Secret — is watched the same way:
-// narrow the event stream to the one object the operator reads, then fan a real
-// change out across every Workspace. The two helpers below express that shape
-// once; each input supplies only its matcher and its notion of "changed".
+// Every operator-wide input — the tenant-operator-config ConfigMap and the
+// tenant-operator-secret Secret — is watched the same way: narrow the event
+// stream to the one object the operator reads, then fan a real change out
+// across every Workspace. The two helpers below express that shape once; each
+// input supplies only its matcher and its notion of "changed".
 
 // enqueueAllWorkspacesIf maps an event on an operator-wide input to a reconcile
 // of every Workspace. Objects the operator does not read are dropped, so a stray
@@ -380,16 +360,6 @@ func operatorInputPredicate[T client.Object](
 			return matches(e.Object)
 		},
 	}
-}
-
-// gatewayChangedPredicate narrows Gateway events to the endpoint source
-// Gateways, and updates to the two fields those endpoints read.
-func gatewayChangedPredicate() predicate.Funcs {
-	return operatorInputPredicate(workspace.IsEndpointSourceGateway,
-		func(oldGateway, newGateway *gatewayv1.Gateway) bool {
-			return !equality.Semantic.DeepEqual(oldGateway.Spec.Addresses, newGateway.Spec.Addresses) ||
-				!equality.Semantic.DeepEqual(oldGateway.Spec.Listeners, newGateway.Spec.Listeners)
-		})
 }
 
 // operatorConfigChangedPredicate narrows ConfigMap events to
@@ -474,16 +444,10 @@ func (r *WorkspaceReconciler) updateStatus(ctx context.Context, w *tenantv1alpha
 
 	// Resources whose presence reconcile cannot guarantee from the spec alone are
 	// observed rather than derived:
-	//   - the workspace-config ConfigMap exists only while an endpoint resolves
 	//   - the image pull Secret is written when the Harbor robot is created, so a
 	//     Secret deleted afterwards cannot be rebuilt without new credentials
 	//   - the HelmRepository can be removed out-of-band by a Flux operator
 	var err error
-	if newStatus.ConfigMapRef, err = r.observedRef(
-		ctx, &corev1.ConfigMap{}, workspace.ConfigName, w.Spec.Namespace,
-	); err != nil {
-		return err
-	}
 	if newStatus.ImagePullSecretRef, err = r.observedRef(
 		ctx, &corev1.Secret{}, workspace.ImagePullSecretName, w.Spec.Namespace,
 	); err != nil {

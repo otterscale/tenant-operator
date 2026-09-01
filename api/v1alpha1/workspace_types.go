@@ -160,10 +160,6 @@ type WorkspaceStatus struct {
 	// +optional
 	LimitRangeRef *ResourceReference `json:"limitRangeRef,omitempty"`
 
-	// ConfigMapRef is a reference to the ConfigMap managed by this Workspace.
-	// +optional
-	ConfigMapRef *ResourceReference `json:"configMapRef,omitempty"`
-
 	// RoleBindingRefs references the RBAC RoleBindings created for the members.
 	// +listType=map
 	// +listMapKey=name
