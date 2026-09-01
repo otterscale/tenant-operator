@@ -56,6 +56,9 @@ spec:
           - --health-probe-bind-address=:8081
         image: controller:latest
         name: manager
+        env:
+          - name: SSL_CERT_DIR
+            value: /etc/tenant-operator/ca
         ports:
         - containerPort: 8081
           name: health
@@ -87,7 +90,14 @@ spec:
           requests:
             cpu: 10m
             memory: 64Mi
-        volumeMounts: []
-      volumes: []
+        volumeMounts:
+          - name: trusted-ca
+            mountPath: /etc/tenant-operator/ca
+            readOnly: true
+      volumes:
+        - name: trusted-ca
+          secret:
+            secretName: otterscale-ca
+            optional: true
       serviceAccountName: operator
       terminationGracePeriodSeconds: 10
