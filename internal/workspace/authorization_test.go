@@ -351,6 +351,20 @@ var _ = Describe("ValidateNamespaceAvailable", func() {
 		Expect(workspace.ValidateNamespaceAvailable(ctx, reader, ws)).To(Succeed())
 	})
 
+	It("should deny an adoptable namespace that is terminating", func() {
+		terminating := newNamespace("restored-ns")
+		terminating.Labels = workspace.LabelsForWorkspace("ws-restored", "old-version")
+		now := metav1.Now()
+		terminating.DeletionTimestamp = &now
+		terminating.Finalizers = []string{"kubernetes"}
+		reader := newFakeClient(nil, terminating)
+		ws := newWorkspaceWithName("ws-restored", "restored-ns", nil)
+
+		err := workspace.ValidateNamespaceAvailable(ctx, reader, ws)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(`namespace "restored-ns" is terminating`))
+	})
+
 	It("should deny an ownerless namespace labeled for another workspace", func() {
 		restored := newNamespace("restored-ns")
 		restored.Labels = workspace.LabelsForWorkspace("ws-other", "old-version")

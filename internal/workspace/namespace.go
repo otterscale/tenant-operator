@@ -89,6 +89,11 @@ func ValidateNamespaceAvailable(ctx context.Context, reader client.Reader, ws *t
 	if err != nil {
 		return fmt.Errorf("checking whether namespace %q is available: %w", ws.Spec.Namespace, err)
 	}
+	if !namespace.DeletionTimestamp.IsZero() {
+		return fmt.Errorf(
+			"namespace %q is terminating: wait for the deletion to finish, then retry",
+			ws.Spec.Namespace)
+	}
 	if len(namespace.OwnerReferences) == 0 && hasWorkspaceIdentityLabels(namespace.Labels, ws.Name) {
 		return nil
 	}
