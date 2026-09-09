@@ -78,7 +78,21 @@ func (d *WorkspaceCustomDefaulter) Default(ctx context.Context, ws *tenantv1alph
 	}
 
 	defaultMemberLabels(ws)
+	defaultNamespaceLabel(ws)
 	return nil
+}
+
+// defaultNamespaceLabel mirrors spec.namespace as a label so backup tooling
+// can select the Workspace by the namespace it owns (spec fields are not
+// label-selectable). spec.namespace is immutable after admission, so the
+// label never drifts.
+func defaultNamespaceLabel(ws *tenantv1alpha1.Workspace) {
+	labels := ws.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels[workspace.LabelWorkspaceNamespace] = ws.Spec.Namespace
+	ws.SetLabels(labels)
 }
 
 // namespaceNameAttempts bounds the search for a free generated name. The name

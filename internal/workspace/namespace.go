@@ -64,26 +64,55 @@ func (e *NamespaceConflictError) Error() string {
 }
 
 // ValidateNamespaceAvailable reports whether the workspace's target namespace is
-// still free to create.
+// still free to create — or free to adopt.
 //
 // This is the admission-time counterpart of NamespaceConflictError, which is
-// unrecoverable: reconcile will not adopt a namespace it does not own,
+// unrecoverable: reconcile will not take over a foreign namespace,
 // spec.namespace is immutable, and the conflict does not requeue. Admission is
 // the last point at which the caller can still be told to pick another name.
+//
+// The adoption exception mirrors ReconcileNamespace: restore tooling (e.g.
+// Velero) puts namespaces back before cluster-scoped resources and strips
+// ownerReferences while keeping labels, so when the restored Workspace
+// arrives its namespace already exists. An ownerless namespace stamped with
+// this workspace's identity labels is exactly what reconcile will adopt, and
+// admission must let it through.
 //
 // Only meaningful on create; afterwards the namespace exists precisely because
 // reconcile created it.
 func ValidateNamespaceAvailable(ctx context.Context, reader client.Reader, ws *tenantv1alpha1.Workspace) error {
-	err := reader.Get(ctx, types.NamespacedName{Name: ws.Spec.Namespace}, &corev1.Namespace{})
+	namespace := &corev1.Namespace{}
+	err := reader.Get(ctx, types.NamespacedName{Name: ws.Spec.Namespace}, namespace)
 	if apierrors.IsNotFound(err) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("checking whether namespace %q is available: %w", ws.Spec.Namespace, err)
 	}
+	if !namespace.DeletionTimestamp.IsZero() {
+		return fmt.Errorf(
+			"namespace %q is terminating: wait for the deletion to finish, then retry",
+			ws.Spec.Namespace)
+	}
+	if len(namespace.OwnerReferences) == 0 && hasWorkspaceIdentityLabels(namespace.Labels, ws.Name) {
+		return nil
+	}
 	return fmt.Errorf(
 		"namespace %q already exists: a workspace creates its own namespace, so choose a different spec.namespace or leave it empty to have one generated",
 		ws.Spec.Namespace)
+}
+
+// hasWorkspaceIdentityLabels reports whether the labels carry the identity
+// this operator stamps on every namespace it creates for the named workspace.
+// The version label is deliberately left out of the comparison: it changes
+// across operator upgrades without changing who the namespace belongs to.
+func hasWorkspaceIdentityLabels(namespaceLabels map[string]string, workspace string) bool {
+	for key, value := range LabelsForWorkspace(workspace, "") {
+		if namespaceLabels[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 // ReconcileNamespace ensures the Namespace exists and is properly labeled.
@@ -99,9 +128,21 @@ func ReconcileNamespace(ctx context.Context, c client.Client, scheme *runtime.Sc
 	rancherProjectID := globalConfig[RancherProjectIDKey]
 
 	op, err := ctrlutil.CreateOrUpdate(ctx, c, namespace, func() error {
-		// Never take over an existing namespace we do not own.
+		// Never take over an existing namespace we do not own. The one
+		// exception is a namespace coming back from backup: restore tooling
+		// (e.g. Velero) strips ownerReferences but keeps labels, and the
+		// restored Workspace carries a new UID, so the namespace can never
+		// match by UID again. An ownerless namespace stamped with this
+		// workspace's identity labels is therefore adopted and re-owned;
+		// anything else stays a conflict.
 		if !IsOwned(namespace.OwnerReferences, w.UID) && !namespace.CreationTimestamp.IsZero() {
-			return &NamespaceConflictError{Name: namespace.Name}
+			adoptable := len(namespace.OwnerReferences) == 0 &&
+				hasWorkspaceIdentityLabels(namespace.Labels, w.Name)
+			if !adoptable {
+				return &NamespaceConflictError{Name: namespace.Name}
+			}
+			log.FromContext(ctx).Info(
+				"Adopting ownerless namespace restored for this workspace", "name", namespace.Name)
 		}
 
 		if namespace.Labels == nil {
