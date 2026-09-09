@@ -29,6 +29,7 @@ import (
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/validate/content"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -336,6 +337,41 @@ var _ = Describe("ValidateNamespaceAvailable", func() {
 		ws := newWorkspaceWithName("ws-first", "ns-first", nil)
 
 		Expect(workspace.ValidateNamespaceAvailable(ctx, reader, ws)).To(Succeed())
+	})
+
+	// A restored namespace (Velero strips ownerReferences, keeps labels) is the
+	// reconciler's adoption case; admission must let the restored Workspace
+	// through so reconcile can re-own it.
+	It("should allow an ownerless namespace carrying the workspace's identity labels", func() {
+		restored := newNamespace("restored-ns")
+		restored.Labels = workspace.LabelsForWorkspace("ws-restored", "old-version")
+		reader := newFakeClient(nil, restored)
+		ws := newWorkspaceWithName("ws-restored", "restored-ns", nil)
+
+		Expect(workspace.ValidateNamespaceAvailable(ctx, reader, ws)).To(Succeed())
+	})
+
+	It("should deny an ownerless namespace labeled for another workspace", func() {
+		restored := newNamespace("restored-ns")
+		restored.Labels = workspace.LabelsForWorkspace("ws-other", "old-version")
+		reader := newFakeClient(nil, restored)
+		ws := newWorkspaceWithName("ws-restored", "restored-ns", nil)
+
+		err := workspace.ValidateNamespaceAvailable(ctx, reader, ws)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(`namespace "restored-ns" already exists`))
+	})
+
+	It("should deny a labeled namespace that is owned by something else", func() {
+		owned := newNamespace("restored-ns")
+		owned.Labels = workspace.LabelsForWorkspace("ws-restored", "old-version")
+		owned.OwnerReferences = []metav1.OwnerReference{
+			{APIVersion: "v1", Kind: "Pod", Name: "x", UID: "someone-else"},
+		}
+		reader := newFakeClient(nil, owned)
+		ws := newWorkspaceWithName("ws-restored", "restored-ns", nil)
+
+		Expect(workspace.ValidateNamespaceAvailable(ctx, reader, ws)).To(HaveOccurred())
 	})
 })
 

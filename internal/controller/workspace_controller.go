@@ -113,6 +113,21 @@ func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// The mutating webhook stamps this label on create/update; reconcile
+	// backfills it onto Workspaces admitted before the label existed, since
+	// backup tooling relies on it to select Workspaces by namespace.
+	if w.Labels[workspace.LabelWorkspaceNamespace] != w.Spec.Namespace {
+		if w.Labels == nil {
+			w.Labels = map[string]string{}
+		}
+		w.Labels[workspace.LabelWorkspaceNamespace] = w.Spec.Namespace
+		if err := r.Update(ctx, &w); err != nil {
+			return ctrl.Result{}, fmt.Errorf("backfilling namespace label: %w", err)
+		}
+		// The update requeues this workspace; reconcile the fresh copy then.
+		return ctrl.Result{}, nil
+	}
+
 	missingHarborMembers, err := r.reconcileResources(ctx, &w)
 	if err != nil {
 		return r.handleReconcileError(ctx, &w, err)

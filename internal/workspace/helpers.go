@@ -40,8 +40,9 @@ const (
 	HelmRepositoryName       = "workspace-helm-repository"
 	HarborDefaultProjectName = "library"
 
-	LabelFromHarbor = "tenant.otterscale.io/from-harbor"
-	LabelInternal   = "tenant.otterscale.io/internal"
+	LabelFromHarbor         = "tenant.otterscale.io/from-harbor"
+	LabelInternal           = "tenant.otterscale.io/internal"
+	LabelWorkspaceNamespace = "tenant.otterscale.io/namespace"
 
 	UserLabelPrefix = "user.otterscale.io/"
 

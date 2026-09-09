@@ -18,6 +18,7 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -134,6 +135,87 @@ func TestReconcileNamespaceRancherProjectID(t *testing.T) {
 			t.Fatalf("annotation = %q, want %q", got, "local:p-existing")
 		}
 	})
+}
+
+// Restore tooling (e.g. Velero) strips ownerReferences and re-creates the
+// Workspace with a new UID, so a restored namespace can never match by UID
+// again; adoption keys off the identity labels instead.
+func TestReconcileNamespaceAdoption(t *testing.T) {
+	t.Parallel()
+
+	// seedNamespace plants a pre-existing namespace the way a restore would:
+	// with a real CreationTimestamp so the ownership guard engages.
+	seedNamespace := func(t *testing.T, c client.Client, namespace *corev1.Namespace) {
+		t.Helper()
+		namespace.CreationTimestamp = metav1.Now()
+		if err := c.Create(context.Background(), namespace); err != nil {
+			t.Fatalf("seed namespace: %v", err)
+		}
+	}
+
+	t.Run("adopts an ownerless namespace carrying this workspace's labels", func(t *testing.T) {
+		w, c, scheme := newNamespaceTest(t, "")
+		seedNamespace(t, c, &corev1.Namespace{
+			Name: w.Spec.Namespace,
+			// A stale version label must not block adoption.
+			Labels: LabelsForWorkspace(w.Name, "old-version"),
+		})
+
+		reconcileNamespaceForTest(t, c, scheme, w)
+
+		namespace := getNamespaceForTest(t, c, w.Spec.Namespace)
+		if !metav1.IsControlledBy(namespace, w) {
+			t.Error("adopted namespace is not controlled by the workspace")
+		}
+		if got := namespace.Labels["pod-security.kubernetes.io/enforce"]; got != "baseline" {
+			t.Errorf("pod security label = %q, want %q", got, "baseline")
+		}
+	})
+
+	t.Run("still refuses an ownerless namespace without the workspace labels", func(t *testing.T) {
+		w, c, scheme := newNamespaceTest(t, "")
+		seedNamespace(t, c, &corev1.Namespace{
+			Name: w.Spec.Namespace,
+		})
+
+		err := ReconcileNamespace(context.Background(), c, scheme, w, "test")
+		if _, ok := errorAsNamespaceConflict(err); !ok {
+			t.Fatalf("error = %v, want NamespaceConflictError", err)
+		}
+	})
+
+	t.Run("still refuses a namespace labeled for another workspace", func(t *testing.T) {
+		w, c, scheme := newNamespaceTest(t, "")
+		seedNamespace(t, c, &corev1.Namespace{
+			Name:   w.Spec.Namespace,
+			Labels: LabelsForWorkspace("workspace-b", "test"),
+		})
+
+		err := ReconcileNamespace(context.Background(), c, scheme, w, "test")
+		if _, ok := errorAsNamespaceConflict(err); !ok {
+			t.Fatalf("error = %v, want NamespaceConflictError", err)
+		}
+	})
+
+	t.Run("still refuses a namespace owned by someone else even with matching labels", func(t *testing.T) {
+		w, c, scheme := newNamespaceTest(t, "")
+		seedNamespace(t, c, &corev1.Namespace{
+			Name:            w.Spec.Namespace,
+			Labels:          LabelsForWorkspace(w.Name, "test"),
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: "v1", Kind: "Pod", Name: "x", UID: "somebody-else"}},
+		})
+
+		err := ReconcileNamespace(context.Background(), c, scheme, w, "test")
+		if _, ok := errorAsNamespaceConflict(err); !ok {
+			t.Fatalf("error = %v, want NamespaceConflictError", err)
+		}
+	})
+}
+
+func errorAsNamespaceConflict(err error) (*NamespaceConflictError, bool) {
+	var conflict *NamespaceConflictError
+	ok := errors.As(err, &conflict)
+	return conflict, ok
 }
 
 // newNamespaceTest builds a Workspace and a fake client. A non-empty

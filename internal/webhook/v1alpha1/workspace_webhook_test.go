@@ -82,6 +82,23 @@ var _ = Describe("Workspace Webhook", func() {
 		defaulter = WorkspaceCustomDefaulter{Reader: newNamespaceReader()}
 	})
 
+	Context("Namespace Label", func() {
+		It("should mirror an explicit spec.namespace as a label", func() {
+			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
+
+			Expect(obj.Labels).To(HaveKeyWithValue(workspace.LabelWorkspaceNamespace, "test-ns"))
+		})
+
+		It("should mirror a generated spec.namespace as a label", func() {
+			obj.Spec.Namespace = ""
+
+			Expect(defaulter.Default(context.Background(), obj)).To(Succeed())
+
+			Expect(obj.Spec.Namespace).NotTo(BeEmpty())
+			Expect(obj.Labels).To(HaveKeyWithValue(workspace.LabelWorkspaceNamespace, obj.Spec.Namespace))
+		})
+	})
+
 	Context("Member Label Synchronization", func() {
 		It("should mirror member subjects as labels on create", func() {
 			obj.Spec.Members = []tenantv1alpha1.WorkspaceMember{
