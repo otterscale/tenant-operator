@@ -99,11 +99,16 @@ const missingHarborMembersRequeue = 5 * time.Minute
 
 // Reconcile runs the level-triggered flow: Fetch -> Domain Sync -> Status Update.
 //
+<<<<<<< HEAD
+// For more details, check Reconcile and its Result here:
+// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.25.0/pkg/reconcile
+=======
 // Member-to-label synchronization is handled by the mutating webhook
 // (WorkspaceCustomDefaulter), so labels are consistent before the object reaches etcd.
 //
 // Deletion needs no finalizer: every child resource carries an OwnerReference to
 // the Workspace, so Kubernetes garbage collection cascades.
+>>>>>>> tmp-original-15-09-26-02-07
 func (r *WorkspaceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithName(req.Name)
 	ctx = log.IntoContext(ctx, logger)

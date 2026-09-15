@@ -66,6 +66,22 @@ func (r *rejectFirstReader) Get(_ context.Context, key client.ObjectKey, _ clien
 var _ = Describe("Workspace Webhook", func() {
 	var (
 		obj       *tenantv1alpha1.Workspace
+<<<<<<< HEAD
+		oldObj    *tenantv1alpha1.Workspace
+		validator WorkspaceValidator
+		defaulter WorkspaceDefaulter
+	)
+
+	BeforeEach(func() {
+		obj = &tenantv1alpha1.Workspace{}
+		oldObj = &tenantv1alpha1.Workspace{}
+		validator = WorkspaceValidator{}
+		Expect(validator).NotTo(BeNil(), "Expected validator to be initialized")
+		defaulter = WorkspaceDefaulter{}
+		Expect(defaulter).NotTo(BeNil(), "Expected defaulter to be initialized")
+		Expect(oldObj).NotTo(BeNil(), "Expected oldObj to be initialized")
+		Expect(obj).NotTo(BeNil(), "Expected obj to be initialized")
+=======
 		defaulter WorkspaceCustomDefaulter
 	)
 
@@ -80,6 +96,7 @@ var _ = Describe("Workspace Webhook", func() {
 			},
 		}
 		defaulter = WorkspaceCustomDefaulter{Reader: newNamespaceReader()}
+>>>>>>> tmp-original-15-09-26-02-07
 	})
 
 	Context("Namespace Label", func() {

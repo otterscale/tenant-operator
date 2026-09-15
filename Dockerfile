@@ -1,5 +1,11 @@
 # Build the manager binary
+<<<<<<< HEAD
+# Override BASE_IMAGE to build from another registry, e.g. docker.io/library/golang:1.26
+ARG BASE_IMAGE=golang:1.26
+FROM ${BASE_IMAGE} AS builder
+=======
 FROM golang:1.27.1@sha256:512690a5660563b57d37ecc31129e7f136e831db2aed24a1dbeb8ad7380dc0fa AS builder
+>>>>>>> tmp-original-15-09-26-02-07
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=devel

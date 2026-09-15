@@ -43,6 +43,10 @@ import (
 // round trip costs nothing.
 func SetupWorkspaceWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr, &tenantv1alpha1.Workspace{}).
+<<<<<<< HEAD
+		WithValidator(&WorkspaceValidator{}).
+		WithDefaulter(&WorkspaceDefaulter{}).
+=======
 		WithDefaulter(&WorkspaceCustomDefaulter{
 			Reader: mgr.GetAPIReader(),
 		}).
@@ -50,11 +54,26 @@ func SetupWorkspaceWebhookWithManager(mgr ctrl.Manager) error {
 			Reader: mgr.GetAPIReader(),
 			Client: mgr.GetClient(),
 		}).
+>>>>>>> tmp-original-15-09-26-02-07
 		Complete()
 }
 
 // +kubebuilder:webhook:path=/mutate-tenant-otterscale-io-v1alpha1-workspace,mutating=true,failurePolicy=fail,sideEffects=None,groups=tenant.otterscale.io,resources=workspaces,verbs=create;update,versions=v1alpha1,name=mworkspace-v1alpha1.kb.io,admissionReviewVersions=v1
 
+<<<<<<< HEAD
+// WorkspaceDefaulter struct is responsible for setting default values on the custom resource of the
+// Kind Workspace when those are created or updated.
+//
+// NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
+// as it is used only for temporary operations and does not need to be deeply copied.
+type WorkspaceDefaulter struct {
+	// TODO(user): Add more fields as needed for defaulting
+}
+
+// Default implements admission.Defaulter so a webhook will be registered for the Kind Workspace.
+func (d *WorkspaceDefaulter) Default(_ context.Context, obj *tenantv1alpha1.Workspace) error {
+	workspacelog.Info("Defaulting for Workspace", "name", obj.GetName())
+=======
 // WorkspaceCustomDefaulter sets default values on CREATE and UPDATE. It mirrors
 // member subjects as labels so external APIs can select on them (e.g. "find all
 // workspaces a user belongs to").
@@ -68,6 +87,7 @@ type WorkspaceCustomDefaulter struct {
 // "user.otterscale.io/" labels mirror the current member subjects.
 func (d *WorkspaceCustomDefaulter) Default(ctx context.Context, ws *tenantv1alpha1.Workspace) error {
 	log.FromContext(ctx).Info("Defaulting for Workspace", "name", ws.GetName())
+>>>>>>> tmp-original-15-09-26-02-07
 
 	if ws.Spec.Namespace == "" {
 		name, err := d.generateAvailableNamespaceName(ctx)
@@ -95,6 +115,20 @@ func defaultNamespaceLabel(ws *tenantv1alpha1.Workspace) {
 	ws.SetLabels(labels)
 }
 
+<<<<<<< HEAD
+// WorkspaceValidator struct is responsible for validating the Workspace resource
+// when it is created, updated, or deleted.
+//
+// NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
+// as this struct is used only for temporary operations and does not need to be deeply copied.
+type WorkspaceValidator struct {
+	// TODO(user): Add more fields as needed for validation
+}
+
+// ValidateCreate implements admission.Validator so a webhook will be registered for the type Workspace.
+func (v *WorkspaceValidator) ValidateCreate(_ context.Context, obj *tenantv1alpha1.Workspace) (admission.Warnings, error) {
+	workspacelog.Info("Validation for Workspace upon creation", "name", obj.GetName())
+=======
 // namespaceNameAttempts bounds the search for a free generated name. The name
 // space is large enough that the first candidate almost always wins.
 const namespaceNameAttempts = 5
@@ -179,6 +213,7 @@ type WorkspaceCustomValidator struct {
 // new Workspace. Privileged callers bypass the check.
 func (v *WorkspaceCustomValidator) ValidateCreate(ctx context.Context, ws *tenantv1alpha1.Workspace) (admission.Warnings, error) {
 	log.FromContext(ctx).Info("Validating Workspace creation", "name", ws.GetName())
+>>>>>>> tmp-original-15-09-26-02-07
 
 	req, err := admission.RequestFromContext(ctx)
 	if err != nil {
@@ -202,11 +237,17 @@ func (v *WorkspaceCustomValidator) ValidateCreate(ctx context.Context, ws *tenan
 	return nil, workspace.AuthorizeCreation(ctx, v.Client, req.UserInfo, ws)
 }
 
+<<<<<<< HEAD
+// ValidateUpdate implements admission.Validator so a webhook will be registered for the type Workspace.
+func (v *WorkspaceValidator) ValidateUpdate(_ context.Context, oldObj, newObj *tenantv1alpha1.Workspace) (admission.Warnings, error) {
+	workspacelog.Info("Validation for Workspace upon update", "name", newObj.GetName())
+=======
 // ValidateUpdate ensures only workspace admins (or privileged identities) can
 // modify an existing Workspace. It checks the old object, so a user cannot grant
 // themselves admin and approve it in the same request.
 func (v *WorkspaceCustomValidator) ValidateUpdate(ctx context.Context, oldWorkspace, newWorkspace *tenantv1alpha1.Workspace) (admission.Warnings, error) {
 	log.FromContext(ctx).Info("Validating Workspace update", "name", newWorkspace.GetName())
+>>>>>>> tmp-original-15-09-26-02-07
 
 	req, err := admission.RequestFromContext(ctx)
 	if err != nil {
@@ -216,10 +257,16 @@ func (v *WorkspaceCustomValidator) ValidateUpdate(ctx context.Context, oldWorksp
 	return nil, workspace.AuthorizeModification(ctx, v.Client, req.UserInfo, oldWorkspace)
 }
 
+<<<<<<< HEAD
+// ValidateDelete implements admission.Validator so a webhook will be registered for the type Workspace.
+func (v *WorkspaceValidator) ValidateDelete(_ context.Context, obj *tenantv1alpha1.Workspace) (admission.Warnings, error) {
+	workspacelog.Info("Validation for Workspace upon deletion", "name", obj.GetName())
+=======
 // ValidateDelete ensures only workspace admins (or privileged identities) can
 // delete a Workspace.
 func (v *WorkspaceCustomValidator) ValidateDelete(ctx context.Context, ws *tenantv1alpha1.Workspace) (admission.Warnings, error) {
 	log.FromContext(ctx).Info("Validating Workspace deletion", "name", ws.GetName())
+>>>>>>> tmp-original-15-09-26-02-07
 
 	req, err := admission.RequestFromContext(ctx)
 	if err != nil {
