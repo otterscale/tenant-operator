@@ -145,6 +145,29 @@ var _ = Describe("Workspace Controller", func() {
 			fetchResource(&rb, ws.RoleBindingName+"-admin", namespaceName)
 			Expect(rb.Subjects).To(ContainElement(WithTransform(func(s rbacv1.Subject) string { return s.Name }, Equal(adminUser))))
 
+			By("Verifying the deployer ServiceAccount and its namespaced admin RoleBinding")
+			var deployerSA corev1.ServiceAccount
+			fetchResource(&deployerSA, ws.ServiceAccountName, namespaceName)
+			var deployerBinding rbacv1.RoleBinding
+			fetchResource(&deployerBinding, ws.ServiceAccountName, namespaceName)
+
+			// TokenReview is cluster-scoped, so the namespaced binding above
+			// cannot grant it: only this ClusterRoleBinding can. Its subject is
+			// the default ServiceAccount, not the deployer.
+			By("Verifying the token reviewer ClusterRoleBinding")
+			var tokenReviewerBinding rbacv1.ClusterRoleBinding
+			fetchResource(&tokenReviewerBinding, ws.TokenReviewerClusterRoleBindingName(resourceName), "")
+			Expect(tokenReviewerBinding.RoleRef.Name).To(Equal(ws.TokenReviewerClusterRoleName))
+			Expect(tokenReviewerBinding.Subjects).To(ConsistOf(rbacv1.Subject{
+				Kind:      rbacv1.ServiceAccountKind,
+				Name:      "default",
+				Namespace: namespaceName,
+			}))
+			// Without the OwnerReference the binding would outlive the
+			// workspace, since nothing else deletes it.
+			Expect(tokenReviewerBinding.OwnerReferences).To(HaveLen(1))
+			Expect(tokenReviewerBinding.OwnerReferences[0].Name).To(Equal(resourceName))
+
 			By("Verifying status updates")
 			fetchResource(workspace, resourceName, "")
 			Expect(workspace.Status.NamespaceRef.Name).To(Equal(namespaceName))

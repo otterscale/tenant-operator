@@ -32,6 +32,10 @@ const (
 	// cluster admission requires in a tenant HelmRelease.
 	ServiceAccountName = "workspace-deployer"
 
+	// TokenReviewerClusterRoleName is the ClusterRole in config/rbac, granting
+	// create on tokenreviews. Carries config/default's namePrefix, like the above.
+	TokenReviewerClusterRoleName = "tenant-workspace-token-reviewer"
+
 	RoleBindingName          = "workspace-role-binding"
 	ResourceQuotaName        = "workspace-resource-quota"
 	LimitRangeName           = "workspace-limit-range"
@@ -53,6 +57,12 @@ const (
 	// ConditionTypeReady reports whether all workspace resources reconciled.
 	ConditionTypeReady = "Ready"
 )
+
+// TokenReviewerClusterRoleBindingName names the cluster-wide binding that grants
+// the workspace namespace's default ServiceAccount create on tokenreviews.
+func TokenReviewerClusterRoleBindingName(workspace string) string {
+	return "workspace-token-reviewer-" + workspace
+}
 
 // LabelsForWorkspace returns the standard labels for operator-managed resources.
 func LabelsForWorkspace(workspace, version string) map[string]string {

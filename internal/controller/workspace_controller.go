@@ -82,7 +82,8 @@ func (r *WorkspaceReconciler) harborClient(creds *workspace.HarborCredentials) h
 // +kubebuilder:rbac:groups="",resources=namespaces;resourcequotas;limitranges,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=bind,resourceNames=admin;edit;view
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=bind,resourceNames=admin;edit;view;tenant-workspace-token-reviewer
 // The webhook asks the cluster authorizer about cluster-wide access instead of
 // reading cluster-wide RBAC itself:
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
@@ -171,6 +172,9 @@ func (r *WorkspaceReconciler) reconcileResources(ctx context.Context, w *tenantv
 		return nil, err
 	}
 	if err := workspace.ReconcileServiceAccount(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
+		return nil, err
+	}
+	if err := workspace.ReconcileTokenReviewer(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
 		return nil, err
 	}
 	if err := workspace.ReconcileResourceQuota(ctx, r.Client, r.Scheme, w, r.Version); err != nil {
@@ -305,6 +309,7 @@ func (r *WorkspaceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Secret{}).
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&rbacv1.RoleBinding{}).
+		Owns(&rbacv1.ClusterRoleBinding{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&sourcev1.HelmRepository{}).
 		Watches(

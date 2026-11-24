@@ -1,0 +1,22 @@
+# Bound cluster-wide to each workspace namespace's "default" ServiceAccount by
+# the Workspace controller, so tenant workloads can validate bearer tokens
+# without naming a ServiceAccount.
+#
+# TokenReview is a non-namespaced resource, so no namespaced RoleBinding can
+# carry this rule: a RoleBinding referencing a ClusterRole silently drops rules
+# for cluster-scoped resources. A ClusterRoleBinding is the only way to grant it.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: tenant-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: workspace-token-reviewer
+rules:
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
