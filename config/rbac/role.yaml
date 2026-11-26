@@ -65,17 +65,8 @@ rules:
   - watch
 - apiGroups:
   - rbac.authorization.k8s.io
-  resourceNames:
-  - admin
-  - edit
-  - view
   resources:
-  - clusterroles
-  verbs:
-  - bind
-- apiGroups:
-  - rbac.authorization.k8s.io
-  resources:
+  - clusterrolebindings
   - rolebindings
   verbs:
   - create
@@ -85,6 +76,17 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resourceNames:
+  - admin
+  - edit
+  - tenant-workspace-token-reviewer
+  - view
+  resources:
+  - clusterroles
+  verbs:
+  - bind
 - apiGroups:
   - source.toolkit.fluxcd.io
   resources:

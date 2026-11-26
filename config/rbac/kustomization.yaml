@@ -25,6 +25,9 @@ resources:
 - workspace_admin_role.yaml
 - workspace_editor_role.yaml
 - workspace_viewer_role.yaml
+# Bound by the Workspace controller to each workspace namespace's default
+# ServiceAccount. TokenReview is cluster-scoped, so no RoleBinding can carry it.
+- workspace_token_reviewer.yaml
 # Self-service: allows all authenticated users to manage workspaces.
 # The validating webhook enforces that only workspace admin members can
 # modify or delete a workspace, and respects the per-user quota for creation.
