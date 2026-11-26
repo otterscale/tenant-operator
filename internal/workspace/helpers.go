@@ -32,8 +32,8 @@ const (
 	// cluster admission requires in a tenant HelmRelease.
 	ServiceAccountName = "workspace-deployer"
 
-	// TokenReviewerClusterRoleName is the ClusterRole in config/rbac, granting
-	// create on tokenreviews. Carries config/default's namePrefix, like the above.
+	// TokenReviewerClusterRoleName is the full name (including config/default's
+	// namePrefix) of the ClusterRole defined in config/rbac/workspace_token_reviewer.yaml.
 	TokenReviewerClusterRoleName = "tenant-workspace-token-reviewer"
 
 	RoleBindingName          = "workspace-role-binding"
